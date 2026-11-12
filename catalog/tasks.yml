@@ -24,7 +24,7 @@ tasks:
       - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "ИБП SNMP v3 — пароль шифрования (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
-    description: "Подключение DEV к Semaphore; проверка или перевыпуск API-токена; аудит Cloudflare"
+    description: "Подключение DEV к Semaphore; проверка или перевыпуск API-токена"
     survey_vars:
       - name: DH_DEV_API_TOKEN_ACTION
         title: "API-токен DEV для Semaphore"
@@ -36,15 +36,6 @@ tasks:
           - {name: "Использовать существующий токен (по умолчанию)", value: keep}
           - {name: "Перевыпустить токен и доставить в DEV", value: rotate}
           - {name: "Проверить SSH-доступ Runner → DEV (без изменений токена)", value: probe}
-      - name: DH_SEMAPHORE_CF_ACTION
-        title: "Cloudflare — Semaphore (общий туннель объекта)"
-        type: enum
-        target: ""
-        required: true
-        default_value: skip
-        values:
-          - {name: "Не изменять Cloudflare", value: skip}
-          - {name: "Проверить маршрут и DNS без изменений", value: audit}
   - name: "10-Настроить PVE"
     playbook: playbooks/setup-pve.yml
     description: "Настройка Proxmox VE 8: пакеты, Bonjour, ИБП, File Browser Quantum (без агентов и Cloudflare)"
@@ -132,7 +123,7 @@ tasks:
           - {name: "snmp-ups — сетевой", value: snmp-ups}
   - name: "70-Cloudflare"
     playbook: playbooks/cloudflare-home.yml
-    description: "Единый Tunnel дома: аудит или перенос существующего коннектора с Semaphore на PVE"
+    description: "Единый Cloudflare Tunnel HOME: аудит, коннектор PVE и маршруты Semaphore/Webmin"
     survey_vars:
       - name: DH_CF70_ACTION
         title: "Cloudflare — действие"
@@ -193,19 +184,6 @@ tasks:
         values:
           - {name: "Проверить доступ без изменения пароля", value: preflight}
           - {name: "Сменить пароль (требуется защищённый запрос на ZFS)", value: apply}
-  - name: "32-Cloudflare Webmin"
-    playbook: playbooks/media-webmin-cloudflare.yml
-    description: "Защищённая публикация Webmin через единый Cloudflare Tunnel объекта и Access"
-    survey_vars:
-      - name: DH_MEDIA_WEBMIN_CF_ACTION
-        title: "Cloudflare — доступ к Webmin"
-        type: enum
-        target: ""
-        required: true
-        default_value: audit
-        values:
-          - {name: "Проверить без изменений", value: audit}
-          - {name: "Опубликовать Webmin через существующий защищённый туннель", value: apply}
   - name: "33-rclone Web GUI"
     playbook: playbooks/media-rclone-gui.yml
     description: "rclone/Restic, PBS 4.2+, локальный datastore/PVE Storage, ежедневный backup, retention 30d, prune/GC/verify и токен клиента; без VM/дисков"

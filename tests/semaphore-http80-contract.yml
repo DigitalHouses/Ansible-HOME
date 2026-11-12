@@ -9,7 +9,7 @@
     sem_dev: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/configure-dev-semaphore.yml') }}"
     sem_catalog: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/update-task-catalog.yml') }}"
     sem_credentials: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../playbooks/obtain-site-credentials.yml') }}"
-    sem_cf: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/semaphore-cloudflare.yml') }}"
+    cf70_admin: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../tasks/cf70-admin-actions.yml') }}"
     sem_dev_curl: "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../bootstrap/tasks/dev-access.yml') }}"
   tasks:
     - name: Require native HTTP80 bootstrap and no self-signed certificate
@@ -38,12 +38,11 @@
           - sem_dev_curl is search('proto.*=http')
           - "'cacert =' not in sem_dev_curl"
 
-    - name: Require exact HTTP80 Tunnel origin behind public HTTPS Access
+    - name: Require Cloudflare publication only in task 70
       ansible.builtin.assert:
         that:
-          - "'http://127.0.0.1/api/ping' in sem_cf"
-          - sem_cf is search("sem_cf_action.*audit")
-          - "'method: PUT' not in sem_cf"
-          - "'method: POST' not in sem_cf"
-          - "'method: DELETE' not in sem_cf"
-          - "'sem_cf_tunnel_name == dev_site_id' in sem_cf"
+          - "'DH_SEMAPHORE_CF_ACTION' not in sem_dev"
+          - "'semaphore-cloudflare.yml' not in sem_dev"
+          - "'-pve-semaphore.' in cf70_admin"
+          - "'/api/ping' in cf70_admin"
+          - "'cf70-publish-route.yml' in cf70_admin"
