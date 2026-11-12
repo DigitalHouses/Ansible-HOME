@@ -28,6 +28,7 @@
       - "CF70_ADMIN_{{ item.name | upper }}_ROUTE_COUNT={{ cf70_config.json.result.config.ingress | selectattr('hostname','defined') | selectattr('hostname','equalto',item.hostname) | list | length }}"
       - "CF70_ADMIN_{{ item.name | upper }}_DNS_COUNT={{ cf70_admin_dns.results[index].json.result | length }}"
       - "CF70_ADMIN_{{ item.name | upper }}_DNS_TYPES={{ cf70_admin_dns.results[index].json.result | map(attribute='type') | list }}"
+      - "CF70_ADMIN_{{ item.name | upper }}_DNS_TARGETS={{ cf70_admin_dns.results[index].json.result | map(attribute='content') | list }}"
       - "CF70_ADMIN_{{ item.name | upper }}_DNS_PROXIED={{ cf70_admin_dns.results[index].json.result | map(attribute='proxied') | list }}"
       - "CF70_ADMIN_{{ item.name | upper }}_DNS_OWNED={{ (cf70_admin_dns.results[index].json.result | first | default({})).content | default('') | lower == (cf70_tunnel.id ~ '.cfargotunnel.com') | lower }}"
       - "CF70_ADMIN_{{ item.name | upper }}_ACCESS_APPS={{ cf70_access.json.result | selectattr('domain','defined') | selectattr('domain','equalto',item.hostname) | map(attribute='name') | list }}"
