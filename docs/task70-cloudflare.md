@@ -9,14 +9,17 @@ The production template is now `70-Cloudflare`, ID **9**, in the existing Semaph
 - Site tunnel `serzhan-home`: UUID `6a04d9cd-0b17-48f3-8366-9f86ea08cb24`, healthy, 1 connector reported by Cloudflare.
 - Published ingress: `serzhan-home-pve.digitalhouses.vip` and `serzhan-home-pve-filebrowser.digitalhouses.vip`; one DNS record observed for each.
 - `serzhan-home / PVE — 192.168.11.220`: `cloudflared.service` active.
-- `serzhan-home / Semaphore Runner — CT1221, 192.168.11.221`: legacy `digitalhouses-site-cloudflared.service` also active. **Do not stop either service until their tunnel identity has been verified**. Cloudflare's one-connector count does not prove which daemon owns it.
+- `serzhan-home / Semaphore Runner — CT1221, 192.168.11.221`: legacy `digitalhouses-site-cloudflared.service` also active.
+- **Follow-up live audits #52, #53, #54, #55 and #56: Success, changed=0.** Cloudflare reports exactly one active connector, started **2026-11-11 02:28:13 UTC**. Runner's managed service started **2026-11-11 02:28:12 UTC** — a one-second match. The PVE `cloudflared.service` was activated **2026-10-22 01:04:33 +05**, so it is not this active connector. The Cloudflare account's site-related tunnel list contained only `serzhan-home`.
+- **Do not stop the Runner service yet**: it currently carries the actual `serzhan-home` Cloudflare connection. Do not modify PVE's earlier `cloudflared.service` either; it may serve a separate emergency connection and its purpose is not yet verified.
+- **Migration prerequisite:** commission the *same* existing site Tunnel on PVE as a separate managed connector, prove an additional live Cloudflare connection and preserved origins, then disable the Runner copy with an immediate rollback path. Do not create another Tunnel or overwrite the existing PVE unit.
 - The first Galaxy download returned HTTP 522, the next attempt was stopped after stalling, and #51 eventually succeeded. The template has Semaphore's built-in Skip Galaxy option configured, but its effect was **not** confirmed in the #51 startup log, which still recorded Galaxy preparation. The global collection required by media workloads was **not** removed.
 - Neither №08's Cloudflare audit nor №32's Webmin publication is fully migrated yet; the new №70 currently supports audit only. Do not advertise the routes, HAOS mTLS or PBS route as implemented.
 
 ## Boundaries
 
 - One existing Cloudflare Tunnel per HOME, named `<site-id>`; preserve its UUID, healthy replicas, routes, DNS and Access policies.
-- **Target:** the site connector is managed on the **HOME PVE host**. The historical №15 service is still active on **Semaphore Runner** and was associated with the site's Tunnel UUID in its last successful run. Identify the actual active connector before implementing any apply or retiring the legacy service.
+- **Target:** manage the site connector on **HOME PVE**. The historical №15 connector is still active on **Semaphore Runner** and is confirmed as the current site-Tunnel connection. Preserve both existing services until a separately verified site connector on PVE is active; do not repurpose the older PVE `cloudflared.service`.
 - All routine HOME Cloudflare management belongs to №70: tunnel/connector audit and non-destructive repair, published routes for PVE / File Browser Quantum / Semaphore / media administration (Webmin), HAOS mobile mTLS, and the PBS private-network route from CORE toward the HOME PBS endpoint.
 - **Emergency access to PVE stays outside №70**, with the PVE/bootstrap emergency path. №08 continues to maintain DEV/Semaphore API access but delegates its Cloudflare publication to №70. №32's Webmin publication moves into №70 without removing its historical Semaphore task record.
 - Do not create a second tunnel/connector for PBS, Webmin, Semaphore or HAOS. Do not add VPN, SSH relay, publicly exposed PBS, or extra credential infrastructure.
