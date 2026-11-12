@@ -132,7 +132,17 @@ tasks:
           - {name: "snmp-ups — сетевой", value: snmp-ups}
   - name: "70-Cloudflare"
     playbook: playbooks/cloudflare-home.yml
-    description: "Аудит действующего Cloudflare Tunnel HOME, коннектора PVE, маршрутов, DNS и Access без изменений"
+    description: "Единый Tunnel дома: аудит или перенос существующего коннектора с Semaphore на PVE"
+    survey_vars:
+      - name: DH_CF70_ACTION
+        title: "Cloudflare — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить без изменений", value: audit}
+          - {name: "Перенести существующий коннектор на PVE", value: migrate}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"

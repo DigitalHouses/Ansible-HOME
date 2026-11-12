@@ -1,0 +1,184 @@
+---
+# Move only the already-existing site Tunnel between already-existing services.
+# No new tunnel, service, Access rule, DNS record or cloudflared installation.
+- name: Require a single healthy Runner connection before the cutover
+  ansible.builtin.assert:
+    that:
+      - cf70_tunnel.status == 'healthy'
+      - cf70_connections.json.result | length == 1
+      - cf70_runner_connector.stdout == 'active'
+      - cf70_pve_connector.stdout == 'active'
+      - cf70_pve_token_path is match('^/[A-Za-z0-9_.\\/-]+$')
+    fail_msg: CF70_CUTOVER_PRECONDITIONS_NOT_MET
+
+- name: Reuse the pinned Runner SSH connection to the existing PVE
+  ansible.builtin.add_host:
+    name: cf70_existing_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      -o ConnectTimeout=7
+    ansible_python_interpreter: /usr/bin/python3
+  changed_when: false
+
+- name: Get a connector token for the existing site Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/token"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_site_connector_token
+  changed_when: false
+  no_log: true
+
+- name: Require the Tunnel token API response
+  ansible.builtin.assert:
+    that:
+      - cf70_site_connector_token.json.success | bool
+      - cf70_site_connector_token.json.result | length > 100
+    fail_msg: CF70_EXISTING_SITE_TOKEN_UNAVAILABLE
+  no_log: true
+
+- name: Switch PVE first, and stop Runner only after Cloudflare confirms it
+  block:
+    - name: Replace only the PVE service's existing token file
+      ansible.builtin.copy:
+        dest: "{{ cf70_pve_token_path }}"
+        content: "{{ cf70_site_connector_token.json.result }}\n"
+        owner: root
+        group: root
+        mode: '0600'
+        backup: true
+      delegate_to: cf70_existing_pve
+      register: cf70_pve_token_install
+      no_log: true
+
+    - name: Restart the existing PVE cloudflared service
+      ansible.builtin.systemd_service:
+        name: cloudflared.service
+        state: restarted
+      delegate_to: cf70_existing_pve
+
+    - name: Wait for a new site Tunnel connection beyond the original Runner
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/connections"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_after_pve_start
+      changed_when: false
+      until: >-
+        (cf70_after_pve_start.json.result | map(attribute='id') | list |
+         difference(cf70_connections.json.result | map(attribute='id') | list) | length) >= 1
+      retries: 15
+      delay: 4
+      no_log: true
+
+    - name: Remember the PVE connection which appeared after the restart
+      ansible.builtin.set_fact:
+        cf70_new_connector_ids: >-
+          {{ cf70_after_pve_start.json.result | map(attribute='id') | list |
+             difference(cf70_connections.json.result | map(attribute='id') | list) }}
+      no_log: true
+
+    - name: Verify the original PVE HTTPS origin through the pinned CA
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/curl
+          - --silent
+          - --show-error
+          - --noproxy
+          - '*'
+          - --cacert
+          - "{{ pve.ca_file }}"
+          - --connect-timeout
+          - '5'
+          - --max-time
+          - '15'
+          - --output
+          - /dev/null
+          - --write-out
+          - '%{http_code}'
+          - "https://{{ pve.ipv4 }}:8006/api2/json/version"
+      register: cf70_pve_origin
+      changed_when: false
+      failed_when: cf70_pve_origin.rc != 0 or cf70_pve_origin.stdout not in ['200', '401']
+
+    - name: Verify the original File Browser origin
+      ansible.builtin.uri:
+        url: "http://{{ pve.ipv4 }}:8090/health"
+        use_proxy: false
+        status_code: 200
+      changed_when: false
+
+    - name: Stop and disable only the obsolete Runner connector service
+      ansible.builtin.systemd_service:
+        name: digitalhouses-site-cloudflared.service
+        state: stopped
+        enabled: false
+      become: true
+
+    - name: Require only the new PVE connection to remain registered
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/connections"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_final_connections
+      changed_when: false
+      until: >-
+        (cf70_final_connections.json.result | map(attribute='id') | list |
+         intersect(cf70_new_connector_ids) | length) >= 1
+        and
+        (cf70_final_connections.json.result | map(attribute='id') | list |
+         intersect(cf70_connections.json.result | map(attribute='id') | list) | length) == 0
+      retries: 15
+      delay: 4
+      no_log: true
+
+    - name: Confirm the cutover kept one existing site Tunnel
+      ansible.builtin.debug:
+        msg:
+          - "CF70_MIGRATION=SUCCESS PVE={{ pve.ipv4 }}"
+          - "CF70_TUNNEL_UUID_UNCHANGED={{ cf70_tunnel.id }}"
+          - "CF70_ACTIVE_PVE_CONNECTORS={{ cf70_final_connections.json.result | length }}"
+          - "CF70_RUNNER_SERVICE=stopped disabled"
+          - "CF70_ORIGINS=verified"
+  rescue:
+    - name: Restore the Runner connector to preserve access on failure
+      ansible.builtin.systemd_service:
+        name: digitalhouses-site-cloudflared.service
+        state: started
+        enabled: true
+      become: true
+
+    - name: Restore previous PVE token if replacement created a backup
+      ansible.builtin.copy:
+        src: "{{ cf70_pve_token_install.backup_file }}"
+        dest: "{{ cf70_pve_token_path }}"
+        remote_src: true
+        owner: root
+        group: root
+        mode: '0600'
+      delegate_to: cf70_existing_pve
+      when:
+        - cf70_pve_token_install is defined
+        - cf70_pve_token_install.backup_file is defined
+      no_log: true
+
+    - name: Restart the existing PVE service with its original token after rollback
+      ansible.builtin.systemd_service:
+        name: cloudflared.service
+        state: restarted
+      delegate_to: cf70_existing_pve
+      when:
+        - cf70_pve_token_install is defined
+        - cf70_pve_token_install.backup_file is defined
+
+    - name: Report safe rollback instead of claiming migration success
+      ansible.builtin.fail:
+        msg: CF70_MIGRATION_FAILED_RUNNER_RESTORED_PVE_TOKEN_ROLLED_BACK

@@ -20,7 +20,7 @@
     - name: Require safe read-only task 70 mode and site credentials
       ansible.builtin.assert:
         that:
-          - cf70_action == 'audit'
+          - cf70_action in ['audit', 'migrate']
           - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - cf70_token | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -285,3 +285,7 @@
           - "CF70_PVE={{ pve.ipv4 }} cloudflared.service={{ cf70_pve_connector.stdout | default('not confirmed', true) }}"
           - "CF70_RUNNER_LEGACY_SERVICE={{ cf70_runner_connector.stdout | default('not present', true) }}"
           - "CF70_NO_MUTATION=true"
+
+    - name: Move the existing site connector to the existing PVE service
+      ansible.builtin.include_tasks: ../tasks/cf70-migrate.yml
+      when: cf70_action == 'migrate'
