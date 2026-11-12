@@ -9,6 +9,12 @@
       headers:
         Authorization: "Bearer {{ dev_admin_token }}"
   block:
+    - name: Validate explicit DEV API token action
+      ansible.builtin.assert:
+        that:
+          - dev_token_action | default('keep', true) in ['keep', 'rotate']
+        fail_msg: DH_DEV_API_TOKEN_ACTION must be keep or rotate
+
     - name: Read Semaphore users
       ansible.builtin.uri:
         url: "{{ semaphore_api }}/users"
@@ -165,12 +171,16 @@
           name: ansible-home-local-dev
         status_code: 201
       register: dev_new_token
-      when: not dev_token_file.stat.exists
+      when: not dev_token_file.stat.exists or (dev_token_action | default('keep', true)) == 'rotate'
       changed_when: true
 
     - name: Select API credential
       ansible.builtin.set_fact:
-        dev_api_token: "{{ (dev_existing_token.content | b64decode | trim) if dev_token_file.stat.exists else dev_new_token.json.id }}"
+        dev_api_token: >-
+          {{ (dev_new_token.json.id)
+             if ((dev_token_action | default('keep', true)) == 'rotate'
+                 or not dev_token_file.stat.exists)
+             else (dev_existing_token.content | b64decode | trim) }}
 
     - name: Verify token's identity
       ansible.builtin.uri:

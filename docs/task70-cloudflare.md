@@ -40,7 +40,7 @@ The direction is **CORE client → Cloudflare → existing HOME PVE connector �
 ## Semaphore cutover order (history-preserving)
 
 1. Restore working authorized DEV API access. Existing protected curl configuration currently returns HTTP 401; do not modify Semaphore until this is resolved.
-2. Keep the existing Semaphore project, inventories, credentials, environments, history and template IDs. Add `DigitalHouses/Ansible-HOMES` on `main` as a **new** repository record; leave the original `Ansible-3` record intact.
+2. Keep the existing Semaphore project, inventories, credentials, environments, history and template IDs. Add `DigitalHouses/Ansible-HOME` on `main` as a **new** repository record; leave the original `Ansible-3` record intact.
 3. Repoint owned HOME templates in-place and smoke-test №00 without creating or deleting historical templates.
 4. Migrate template **ID 9** from №15 to №70 **in-place**. Update the catalog synchronizer to recognize the legacy entry before publishing the new catalog; do not run a naïve catalog import which creates a duplicate №70.
 5. Only after the repository cutover is verified, implement and test the unified №70 functionality. Preserve a reversible reference to the original repository record.
@@ -52,4 +52,4 @@ The direction is **CORE client → Cloudflare → existing HOME PVE connector �
 - Default Audit makes no Cloudflare, host, DNS, Access, certificate or network changes.
 - Routine operations target the PVE connector, not the legacy Runner connector.
 - HAOS mTLS and PBS private-network routing are tested separately, without changing the existing healthy public routes.
-- CORE-specific PBS provisioning/synchronization is absent from Ansible-HOMES.
+- CORE-specific PBS provisioning/synchronization is absent from Ansible-HOME.

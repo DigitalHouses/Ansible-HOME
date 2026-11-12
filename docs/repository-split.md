@@ -2,7 +2,7 @@
 
 1. Preserve the current project, Runner, inventory, templates, history,
    variable groups, and the old Ansible-3 repository record.
-2. Add Ansible-HOMES main as a new Git repository record in that project.
+2. Add Ansible-HOME main as a new Git repository record in that project.
 3. Verify that all currently used HOME playbooks and required files exist.
 4. Repoint ONLY owned HOME templates to the new repository, retaining IDs
    and surveys; verify task 00 and task 15/32 before running anything.
@@ -15,12 +15,12 @@ Original source: b97b840 feat/bootstrap-home-core.
 
 ## Repository status — 2026-11-12
 
-- Canonical GitHub name: `DigitalHouses/Ansible-HOMES` (renamed from
-  `DigitalHouses/Ansible-HOME`); default branch `main`.
+- Canonical GitHub name: `DigitalHouses/Ansible-HOME` (renamed on
+  2026-11-12 from `DigitalHouses/Ansible-HOMES`); default branch `main`.
 - The source repository `DigitalHouses/Ansible-3` is archived read-only but
   remains cloneable for existing Semaphore tasks and historical checkout.
 - **Existing HOME Semaphore cutover has NOT been verified or executed here.**
   Each HOME site must independently move its Semaphore repository and
-  inventory references to Ansible-HOMES and smoke-test task 00. Keep the
+  inventory references to Ansible-HOME and smoke-test task 00. Keep the
   original task/template IDs, credentials and history.
 - No HOME PVE, Media/PBS or Cloudflare changes were made here.

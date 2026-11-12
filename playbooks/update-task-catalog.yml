@@ -1,6 +1,6 @@
 ---
 # Manual Semaphore task 00: adds missing catalog templates without running them.
-- name: Update the public Ansible-HOMES task catalog
+- name: Update the public Ansible-HOME task catalog
   hosts: runner
   gather_facts: false
   become: false
@@ -106,7 +106,7 @@
           name: "{{ item.name }}"
           project_id: "{{ site_projects[0].id }}"
           app: ansible
-          description: "{{ item.description | default('Ansible-HOMES task') }}"
+          description: "{{ item.description | default('Ansible-HOME task') }}"
           playbook: "{{ item.playbook }}"
           arguments: '[]'
           type: ''

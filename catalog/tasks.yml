@@ -3,7 +3,7 @@
 tasks:
   - name: 00-Обновить список задач
     playbook: playbooks/update-task-catalog.yml
-    description: Обновить каталог задач Semaphore из Ansible-HOMES (без запуска остальных задач)
+    description: Обновить каталог задач Semaphore из Ansible-HOME (без запуска остальных задач)
   - name: "05-Ввести и проверить credentials"
     playbook: playbooks/obtain-site-credentials.yml
     description: "Ввод и обновление паролей и токенов; проверка доступа к PVE, GitHub и Cloudflare"
@@ -24,8 +24,17 @@ tasks:
       - {name: DH_INPUT_PVE_SNMP_PRIV_PASSWORD, title: "ИБП SNMP v3 — пароль шифрования (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
   - name: "08-Настроить доступ DEV к Semaphore"
     playbook: playbooks/configure-dev-semaphore.yml
-    description: "Подключение DEV к Semaphore; доступ Cloudflare через единый туннель объекта"
+    description: "Подключение DEV к Semaphore; проверка или перевыпуск API-токена; аудит Cloudflare"
     survey_vars:
+      - name: DH_DEV_API_TOKEN_ACTION
+        title: "API-токен DEV для Semaphore"
+        type: enum
+        target: ""
+        required: true
+        default_value: keep
+        values:
+          - {name: "Использовать существующий токен (по умолчанию)", value: keep}
+          - {name: "Перевыпустить токен и доставить в DEV", value: rotate}
       - name: DH_SEMAPHORE_CF_ACTION
         title: "Cloudflare — Semaphore (общий туннель объекта)"
         type: enum

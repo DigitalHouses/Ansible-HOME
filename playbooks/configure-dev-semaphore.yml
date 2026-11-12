@@ -10,6 +10,7 @@
     - /etc/digitalhouses/pve.yml
   vars:
     semaphore_api: http://127.0.0.1/api
+    dev_token_action: "{{ DH_DEV_API_TOKEN_ACTION | default('keep', true) }}"
     sem_cf_action: "{{ DH_SEMAPHORE_CF_ACTION | default('skip', true) }}"
     sem_cf_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
     sem_cf_api: https://api.cloudflare.com/client/v4
@@ -182,6 +183,52 @@
   tasks:
     - name: Use the shared transport without introducing another service
       ansible.builtin.include_tasks: ../tasks/dev-delivery.yml
+
+- name: 08 - Expire superseded DEV token only after confirmed DEV delivery
+  hosts: runner
+  connection: local
+  become: true
+  gather_facts: false
+  vars:
+    semaphore_api: http://127.0.0.1/api
+  tasks:
+    - name: Find the previous token in the dedicated user's token list
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/user/tokens"
+        headers:
+          Authorization: "Bearer {{ dev_api_token }}"
+        use_proxy: false
+        status_code: 200
+      register: dev_tokens_after_delivery
+      changed_when: false
+      no_log: true
+      when:
+        - dev_token_action == 'rotate'
+        - dev_token_file.stat.exists
+
+    - name: Expire the former token, never another user's token
+      ansible.builtin.uri:
+        url: >-
+          {{ semaphore_api }}/user/tokens/{{
+            (dev_existing_token.content | b64decode | trim)
+            | replace('/', '%2F') | replace('+', '%2B') | replace('=', '%3D')
+          }}
+        method: DELETE
+        headers:
+          Authorization: "Bearer {{ dev_api_token }}"
+        use_proxy: false
+        status_code: [204, 404]
+      register: dev_previous_token_revoke
+      changed_when: dev_previous_token_revoke.status == 204
+      no_log: true
+      when:
+        - dev_token_action == 'rotate'
+        - dev_token_file.stat.exists
+        - (dev_existing_token.content | b64decode | trim) != dev_api_token
+        - >-
+          (dev_tokens_after_delivery.json |
+           selectattr('id', 'equalto', (dev_existing_token.content | b64decode | trim)) |
+           list | length) == 1
 
 # The Semaphore service owns the job's systemd cgroup. Restarting it while this
 # playbook is running terminates the job; schedule the restart at the very end.
