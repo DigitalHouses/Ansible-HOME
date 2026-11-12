@@ -135,23 +135,26 @@
       ansible.builtin.debug:
         msg: "PBS34_DISCOVERED_DATASTORES={{ pbs34_stores }}"
 
-    - name: Require exactly one existing HOME source datastore
+    - name: Confirm the HOME source is present before any CORE token provisioning
       ansible.builtin.assert:
         that:
           - pbs34_store_matches | length == 1
-        fail_msg: PBS34_HOME_DATASTORE_MISSING
+        fail_msg: PBS34_HOME_DATASTORE_MISSING_DO_NOT_CREATE_CORE_TOKEN
+      when: pbs34_action == 'apply'
 
-    - name: Inspect the exact HOME source datastore
+    - name: Inspect the exact HOME source datastore if registered
       ansible.builtin.command:
         argv: [proxmox-backup-manager, datastore, show, "{{ pbs34_store }}", --output-format, json]
       register: pbs34_store_details
       changed_when: false
+      when: pbs34_store_matches | length == 1
 
     - name: Require canonical path and do not change source storage
       ansible.builtin.assert:
         that:
           - (pbs34_store_details.stdout | from_json).path == '/' ~ pbs34_media.storage.pool_name ~ '/' ~ pbs34_store
         fail_msg: PBS34_SOURCE_PATH_CHANGED
+      when: pbs34_store_matches | length == 1
 
     - name: Read existing users without exposing passwords
       ansible.builtin.command:
@@ -201,7 +204,9 @@
           - "PBS34_VERSIONS={{ pbs34_versions.stdout_lines | first }}"
           - "PBS34_PROXY={{ pbs34_proxy.stdout | trim }}"
           - "PBS34_DATASTORES={{ pbs34_stores | map(attribute='name') | list }}"
-          - "PBS34_SOURCE={{ pbs34_store }} PATH={{ (pbs34_store_details.stdout | from_json).path }}"
+          - "PBS34_SOURCE={{ pbs34_store }} REGISTERED={{ pbs34_store_matches | length == 1 }}"
+          - "PBS34_SOURCE_PATH={{ (pbs34_store_details.stdout | from_json).path if pbs34_store_matches | length == 1 else 'NOT_REGISTERED' }}"
+          - "PBS34_CORE_SYNC_READY={{ pbs34_store_matches | length == 1 }} (no registered datastore means no namespaces or backup groups available)"
           - "PBS34_USERS={{ (pbs34_users_raw.stdout | from_json) | map(attribute='userid') | list }}"
           - "PBS34_ROOT_TOKEN_IDS={{ (pbs34_tokens_raw.stdout | from_json) | map(attribute='tokenid') | list }}"
           - "PBS34_ACL_COUNT={{ (pbs34_acl_raw.stdout | from_json) | length }}"
