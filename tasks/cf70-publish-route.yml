@@ -1,0 +1,241 @@
+---
+# Publish one selected admin hostname into the existing HOME Tunnel.
+# Never create/recreate a Tunnel, connector, Access app or unrelated DNS.
+- name: Require the already migrated PVE connector
+  ansible.builtin.assert:
+    that:
+      - cf70_tunnel.status == 'healthy'
+      - cf70_pve_connector.stdout == 'active'
+      - cf70_runner_connector.stdout != 'active'
+      - cf70_connections.json.result | length == 1
+    fail_msg: CF70_PUBLISH_REQUIRES_EXISTING_PVE_CONNECTOR
+
+- name: Inspect existing ownership of this exact route
+  ansible.builtin.set_fact:
+    cf70_route_config: "{{ cf70_config.json.result.config }}"
+    cf70_route_matches: >-
+      {{ cf70_config.json.result.config.ingress
+         | selectattr('hostname', 'defined')
+         | selectattr('hostname', 'equalto', cf70_endpoint.hostname) | list }}
+    cf70_route_exact_access: >-
+      {{ cf70_access.json.result | selectattr('type','equalto','self_hosted')
+         | selectattr('domain','defined')
+         | selectattr('domain','equalto',cf70_endpoint.hostname) | list }}
+    cf70_route_wildcard_access: >-
+      {{ cf70_access.json.result | selectattr('type','equalto','self_hosted')
+         | selectattr('domain','defined')
+         | selectattr('domain','equalto','*.' ~ cf70_zone_name) | list }}
+
+- name: Require a unique route and an existing Access application
+  ansible.builtin.assert:
+    that:
+      - cf70_route_matches | length <= 1
+      - cf70_route_config.ingress[-1].service == 'http_status:404'
+      - cf70_route_exact_access | length <= 1
+      - cf70_route_wildcard_access | length <= 1
+      - cf70_route_exact_access | length == 1 or cf70_route_wildcard_access | length == 1
+      - cf70_route_matches | length == 0 or cf70_route_matches[0].service == cf70_endpoint.service
+    fail_msg: CF70_PUBLISH_EXISTING_ROUTE_OR_ACCESS_CONFLICT
+
+- name: Select the existing application covering the selected hostname
+  ansible.builtin.set_fact:
+    cf70_route_access_app: >-
+      {{ (cf70_route_exact_access if cf70_route_exact_access | length == 1
+          else cf70_route_wildcard_access)[0] }}
+
+- name: Read existing Cloudflare Access policies
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/access/apps/{{ cf70_route_access_app.id }}/policies?per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_route_policies
+  changed_when: false
+  no_log: true
+
+- name: Require existing restricted email-based Access protection
+  ansible.builtin.assert:
+    that:
+      - cf70_route_policies.json.success | bool
+      - cf70_route_policies.json.result_info.total_pages | default(1) | int == 1
+      - cf70_route_policies.json.result | selectattr('decision','equalto','bypass') | list | length == 0
+      - cf70_route_policies.json.result | selectattr('decision','equalto','allow') | list | length > 0
+      - cf70_route_policies.json.result | map(attribute='include') | flatten | selectattr('everyone','defined') | list | length == 0
+      - cf70_route_policies.json.result | selectattr('decision','equalto','allow') | map(attribute='include') | flatten | selectattr('email','defined') | list | length > 0
+    fail_msg: CF70_PUBLISH_RESTRICTED_ACCESS_REQUIRED
+  no_log: true
+
+- name: Read DNS for only the selected admin hostname
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records?name={{ cf70_endpoint.hostname }}&per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_route_dns
+  changed_when: false
+  no_log: true
+
+- name: Refuse another site's DNS or unsupported record type
+  ansible.builtin.assert:
+    that:
+      - cf70_route_dns.json.success | bool
+      - cf70_route_dns.json.result_info.total_pages | default(1) | int == 1
+      - cf70_route_dns.json.result | length <= 1
+      - cf70_route_dns.json.result | length == 0 or cf70_route_dns.json.result[0].type == 'CNAME'
+      - cf70_route_dns.json.result | length == 0 or cf70_route_dns.json.result[0].proxied | bool
+      - cf70_route_dns.json.result | length == 0 or cf70_route_dns.json.result[0].content | lower is match('^[0-9a-f-]{36}[.]cfargotunnel[.]com$')
+    fail_msg: CF70_PUBLISH_DNS_NOT_A_SITE_TUNNEL_CNAME
+
+- name: Prepare the selected ingress while preserving all other routes
+  ansible.builtin.set_fact:
+    cf70_route_entry: >-
+      {{ {'hostname': cf70_endpoint.hostname,
+          'service': cf70_endpoint.service,
+          'originRequest': {'noTLSVerify': true,
+                            'httpHostHeader': cf70_endpoint.hostname}}
+         if cf70_endpoint.kind == 'webmin' else
+         {'hostname': cf70_endpoint.hostname,
+          'service': cf70_endpoint.service} }}
+
+- name: Require an unchanged existing route configuration
+  ansible.builtin.assert:
+    that:
+      - cf70_route_matches | length == 0 or cf70_route_matches[0] == cf70_route_entry
+    fail_msg: CF70_PUBLISH_ROUTE_EXISTS_WITH_DIFFERENT_ORIGIN_OPTIONS
+
+- name: Prepare the minimally changed ingress
+  ansible.builtin.set_fact:
+    cf70_route_ingress: >-
+      {{ cf70_route_config.ingress[:-1] + [cf70_route_entry] +
+         [cf70_route_config.ingress[-1]]
+         if cf70_route_matches | length == 0 else cf70_route_config.ingress }}
+
+- name: Recheck shared Tunnel ingress before writing
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_route_before_write
+  changed_when: false
+  no_log: true
+
+- name: Reject concurrent edits to the shared Tunnel
+  ansible.builtin.assert:
+    that:
+      - cf70_route_before_write.json.result.config == cf70_route_config
+    fail_msg: CF70_CONCURRENT_TUNNEL_CONFIGURATION_CHANGE
+
+- name: Publish only the missing route in the existing Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    method: PUT
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      config: "{{ cf70_route_config | combine({'ingress': cf70_route_ingress}) }}"
+    use_proxy: false
+    status_code: 200
+  when: cf70_route_matches | length == 0
+  register: cf70_route_publish
+  changed_when: true
+  no_log: true
+
+- name: Update only the selected old Tunnel CNAME to the existing site Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records/{{ cf70_route_dns.json.result[0].id }}"
+    method: PUT
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      type: CNAME
+      name: "{{ cf70_endpoint.hostname }}"
+      content: "{{ cf70_tunnel.id }}.cfargotunnel.com"
+      proxied: true
+      ttl: 1
+    use_proxy: false
+    status_code: 200
+  when:
+    - cf70_route_dns.json.result | length == 1
+    - cf70_route_dns.json.result[0].content | lower != (cf70_tunnel.id ~ '.cfargotunnel.com') | lower
+  changed_when: true
+  no_log: true
+
+- name: Create missing DNS only if the selected hostname has no record
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records"
+    method: POST
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      type: CNAME
+      name: "{{ cf70_endpoint.hostname }}"
+      content: "{{ cf70_tunnel.id }}.cfargotunnel.com"
+      proxied: true
+      ttl: 1
+    use_proxy: false
+    status_code: [200, 201]
+  when: cf70_route_dns.json.result | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Read the final shared ingress
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_route_after
+  changed_when: false
+  no_log: true
+
+- name: Verify the selected ingress is persisted without changing other routes
+  ansible.builtin.assert:
+    that:
+      - cf70_route_after.json.result.config.ingress == cf70_route_ingress
+    fail_msg: CF70_SELECTED_ROUTE_NOT_PERSISTED
+
+- name: Verify final DNS points to this same Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records?name={{ cf70_endpoint.hostname }}&per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_route_final_dns
+  changed_when: false
+  no_log: true
+
+- name: Require one proxied CNAME targeting the original site Tunnel UUID
+  ansible.builtin.assert:
+    that:
+      - cf70_route_final_dns.json.result | length == 1
+      - cf70_route_final_dns.json.result[0].type == 'CNAME'
+      - cf70_route_final_dns.json.result[0].proxied | bool
+      - cf70_route_final_dns.json.result[0].content | lower == (cf70_tunnel.id ~ '.cfargotunnel.com') | lower
+    fail_msg: CF70_ROUTE_DNS_READBACK_MISMATCH
+
+- name: Confirm Cloudflare Access still intercepts unauthenticated requests
+  ansible.builtin.uri:
+    url: "https://{{ cf70_endpoint.hostname }}/"
+    follow_redirects: none
+    use_proxy: false
+    validate_certs: true
+    status_code: 302
+    timeout: 15
+  register: cf70_route_public
+  changed_when: false
+  until: >-
+    cf70_route_public.status | default(0) == 302 and
+    cf70_route_public.location | default('') is
+    match('^https://[^/]+[.]cloudflareaccess[.]com/cdn-cgi/access/login/.*')
+  retries: 5
+  delay: 3
+  no_log: true
+
+- name: Report this route without altering any other service
+  ansible.builtin.debug:
+    msg:
+      - "CF70_ROUTE={{ cf70_endpoint.name }} URL=https://{{ cf70_endpoint.hostname }}/"
+      - "CF70_TUNNEL_UUID_UNCHANGED={{ cf70_tunnel.id }}"
+      - "CF70_ACCESS=EXISTING_RESTRICTED"
+      - "CF70_DNS=ONE_PROXIED_CNAME_TO_SITE_TUNNEL"

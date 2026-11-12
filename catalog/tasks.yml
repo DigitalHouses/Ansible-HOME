@@ -143,6 +143,8 @@ tasks:
         values:
           - {name: "Проверить без изменений", value: audit}
           - {name: "Перенести существующий коннектор на PVE", value: migrate}
+          - {name: "Опубликовать Semaphore через существующий Tunnel", value: publish_semaphore}
+          - {name: "Опубликовать Webmin через существующий Tunnel", value: publish_webmin}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"

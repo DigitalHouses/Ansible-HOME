@@ -1,0 +1,26 @@
+---
+- name: Offline contract for the two selected HOME Cloudflare routes
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    routes: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf70-publish-route.yml') | from_yaml }}"
+  tasks:
+    - name: Parse selected admin origins without executing live operations
+      ansible.builtin.import_tasks: ../tasks/cf70-admin-actions.yml
+      when: false
+
+    - name: Parse selected route mutations without executing live operations
+      ansible.builtin.import_tasks: ../tasks/cf70-publish-route.yml
+      when: false
+
+    - name: Require only the existing Tunnel and selected DNS record to change
+      ansible.builtin.assert:
+        that:
+          - routes | selectattr('name','equalto','Publish only the missing route in the existing Tunnel') | list | length == 1
+          - routes | selectattr('name','equalto','Update only the selected old Tunnel CNAME to the existing site Tunnel') | list | length == 1
+          - routes | to_json is not search('cfd_tunnel.*/token')
+          - routes | to_json is not search('cfd_tunnel.*/delete')
+          - routes | to_json is not search('method.*DELETE')
+          - routes | to_json is not search('access/apps.*/PUT')

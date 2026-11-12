@@ -1,0 +1,102 @@
+---
+# Prepare only the explicitly selected administrative service.
+- name: Require published admin routes to be explicitly selected
+  ansible.builtin.assert:
+    that:
+      - cf70_action in ['publish_semaphore', 'publish_webmin']
+    fail_msg: CF70_ROUTE_ACTION_UNRECOGNIZED
+
+- name: Prepare local Semaphore route without changing Semaphore
+  when: cf70_action == 'publish_semaphore'
+  block:
+    - name: Read the existing Runner management IPv4
+      ansible.builtin.command:
+        argv: [/usr/sbin/ip, -4, -o, addr, show, dev, eth0]
+      register: cf70_runner_address
+      changed_when: false
+
+    - name: Require one valid Runner IP address
+      ansible.builtin.assert:
+        that:
+          - cf70_runner_address.stdout_lines | length == 1
+          - "'inet ' in cf70_runner_address.stdout"
+          - cf70_runner_address.stdout.split('inet ')[1].split('/')[0] is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+        fail_msg: CF70_SEMAPHORE_RUNNER_ADDRESS_INVALID
+
+    - name: Check Semaphore's existing LAN HTTP API
+      ansible.builtin.uri:
+        url: "http://{{ cf70_runner_address.stdout.split('inet ')[1].split('/')[0] }}/api/ping"
+        use_proxy: false
+        status_code: 200
+        return_content: true
+      register: cf70_semaphore_origin
+      changed_when: false
+
+    - name: Require a healthy origin before publishing the route
+      ansible.builtin.assert:
+        that: cf70_semaphore_origin.content | trim == 'pong'
+        fail_msg: CF70_SEMAPHORE_ORIGIN_UNAVAILABLE
+
+    - name: Describe only the existing local Semaphore origin
+      ansible.builtin.set_fact:
+        cf70_endpoint:
+          name: semaphore
+          kind: semaphore
+          hostname: "{{ site_id }}-pve-semaphore.{{ cf70_zone_name }}"
+          service: "http://{{ cf70_runner_address.stdout.split('inet ')[1].split('/')[0] }}:80"
+
+- name: Prepare Webmin route from the existing site media manifest
+  when: cf70_action == 'publish_webmin'
+  block:
+    - name: Require the already managed GitHub provisioning credential
+      ansible.builtin.assert:
+        that: DH_GITHUB_PROVISION_TOKEN | default('') | length > 0
+        fail_msg: CF70_SITE_MEDIA_MANIFEST_CREDENTIAL_REQUIRED
+      no_log: true
+
+    - name: Fetch the canonical private media VM configuration
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/DigitalHouses/site-{{ site_id }}/contents/inventories/{{ site_id }}/media_vm.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+          Accept: application/vnd.github+json
+        use_proxy: false
+        status_code: 200
+      register: cf70_media_manifest
+      changed_when: false
+      no_log: true
+
+    - name: Read only the existing media VM identity and its IP
+      ansible.builtin.set_fact:
+        cf70_media_vm: "{{ (cf70_media_manifest.json.content | b64decode | from_yaml).media_vm }}"
+      no_log: true
+
+    - name: Require the standard HOME media VM identity and subnet
+      ansible.builtin.assert:
+        that:
+          - cf70_media_vm.name is match('^mediaserver-[a-z0-9-]+$')
+          - cf70_media_vm.vmid | int == 2223
+          - cf70_media_vm.network.ipv4 is match('^([0-9]{1,3}[.]){3}223/24$')
+          - cf70_media_vm.network.ipv4.split('/')[0].split('.')[0:3] == pve.ipv4.split('.')[0:3]
+        fail_msg: CF70_WEBMIN_MEDIA_VM_ADDRESS_CONFLICT
+
+    - name: Check the existing HTTPS Webmin origin
+      ansible.builtin.uri:
+        url: "https://{{ cf70_media_vm.network.ipv4.split('/')[0] }}:10000/"
+        validate_certs: false
+        use_proxy: false
+        follow_redirects: none
+        status_code: [200, 302, 303]
+        timeout: 12
+      changed_when: false
+
+    - name: Describe only the existing media Webmin origin
+      ansible.builtin.set_fact:
+        cf70_endpoint:
+          name: webmin
+          kind: webmin
+          hostname: "{{ site_id }}-pve-mediaserver-admin.{{ cf70_zone_name }}"
+          service: "https://{{ cf70_media_vm.network.ipv4.split('/')[0] }}:10000"
+
+- name: Publish only the independently chosen admin route
+  ansible.builtin.include_tasks: cf70-publish-route.yml
