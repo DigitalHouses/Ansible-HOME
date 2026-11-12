@@ -12,3 +12,15 @@
 7. Rollback is a repository-record repoint to the untouched Ansible-3 source.
 
 Original source: b97b840 feat/bootstrap-home-core.
+
+## Repository status — 2026-11-12
+
+- Canonical GitHub name: `DigitalHouses/Ansible-HOMES` (renamed from
+  `DigitalHouses/Ansible-HOME`); default branch `main`.
+- The source repository `DigitalHouses/Ansible-3` is archived read-only but
+  remains cloneable for existing Semaphore tasks and historical checkout.
+- **Existing HOME Semaphore cutover has NOT been verified or executed here.**
+  Each HOME site must independently move its Semaphore repository and
+  inventory references to Ansible-HOMES and smoke-test task 00. Keep the
+  original task/template IDs, credentials and history.
+- No HOME PVE, Media/PBS or Cloudflare changes were made here.
