@@ -1,0 +1,50 @@
+---
+# Offline regression for current task 70 (no Cloudflare writes).
+- name: Verify safe in-place HOME Cloudflare migration contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    catalog: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    cf70_playbook: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/cloudflare-home.yml') | from_yaml }}"
+    migration_tasks: "{{ lookup('ansible.builtin.file', root ~ '/tasks/semaphore-home-cf70-cutover.yml') | from_yaml }}"
+    task00: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/update-task-catalog.yml') | from_yaml }}"
+    cf70_entries: "{{ catalog.tasks | selectattr('name', 'equalto', '70-Cloudflare') | list }}"
+    legacy_entries: "{{ catalog.tasks | selectattr('name', 'equalto', '15-Cloudflare') | list }}"
+  tasks:
+    - name: Require only one canonical Cloudflare task in the HOME catalog
+      ansible.builtin.assert:
+        that:
+          - cf70_entries | length == 1
+          - legacy_entries | length == 0
+          - cf70_entries[0].playbook == 'playbooks/cloudflare-home.yml'
+          - cf70_entries[0].survey_vars is not defined
+
+    - name: Require read-only audit with no automatic installation or mutation
+      ansible.builtin.assert:
+        that:
+          - cf70_playbook | length == 1
+          - cf70_playbook[0].hosts == 'runner'
+          - cf70_playbook[0].tasks | to_json is not search('method.*PUT')
+          - cf70_playbook[0].tasks | to_json is not search('method.*POST')
+          - cf70_playbook[0].tasks | to_json is not search('method.*DELETE')
+          - cf70_playbook[0].tasks | to_json is not search('"ansible.builtin.apt"')
+          - cf70_playbook[0].tasks | to_json is not search('"ansible.builtin.service"')
+          - cf70_playbook[0].tasks | to_json is not search('"ansible.builtin.systemd"')
+          - cf70_playbook[0].tasks | to_json is search('CF70_NO_MUTATION=true')
+
+    - name: Require in-place migration rather than adding a replacement template
+      ansible.builtin.assert:
+        that:
+          - migration_tasks | selectattr('name', 'equalto',
+              'Rename owned Cloudflare template without replacing its ID or inventory') | list | length == 1
+          - migration_tasks | to_json is not search('method.*POST')
+          - migration_tasks | to_json is not search('method.*DELETE')
+          - task00[0].tasks | selectattr('name', 'equalto',
+              'Migrate the existing Cloudflare template to task 70 in-place') | list | length == 1
+
+    - name: Ensure PVE setup has no routine Cloudflare ownership
+      ansible.builtin.assert:
+        that:
+          - "'DH_PVE_CF_ACTION' not in (lookup('ansible.builtin.file', root ~ '/playbooks/setup-pve.yml'))"
