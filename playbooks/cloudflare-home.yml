@@ -354,6 +354,9 @@
           - "CF70_PVE_CLI_OPTIONS={{ cf70_pve_exec.stdout | regex_findall('--[a-z][a-z0-9-]+') | unique | list }}"
           - "CF70_RUNNER_CLI_OPTIONS={{ cf70_runner_exec.stdout | regex_findall('--[a-z][a-z0-9-]+') | unique | list }}"
           - "CF70_PVE_LOG_LENGTH={{ cf70_pve_startup.stdout | length }} RUNNER_LOG_LENGTH={{ cf70_runner_startup.stdout | length }}"
+          - "CF70_PVE_LOG_TUNNEL_IDS={{ cf70_pve_startup.stdout | regex_findall('tunnelID=([0-9a-f-]{36})') | unique | list }}"
+          - "CF70_PVE_LOG_REGISTERED_COUNT={{ cf70_pve_startup.stdout | regex_findall('Registered tunnel connection') | length }}"
+          - "CF70_RUNNER_LOG_TUNNEL_IDS={{ cf70_runner_startup.stdout | regex_findall('tunnelID=([0-9a-f-]{36})') | unique | list }}"
 
     - name: Report the read-only HOME Cloudflare baseline
       ansible.builtin.debug:
