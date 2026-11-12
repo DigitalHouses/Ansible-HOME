@@ -194,6 +194,46 @@
       changed_when: false
       failed_when: false
 
+    - name: Inspect existing PVE cloudflared unit arguments
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/systemctl
+          - show
+          - --property=ExecStart
+          - --value
+          - cloudflared.service
+      register: cf70_pve_unit
+      changed_when: false
+      no_log: true
+
+    - name: Identify existing PVE connector token path without reading it
+      ansible.builtin.set_fact:
+        cf70_pve_token_path: >-
+          {{ (cf70_pve_unit.stdout | regex_findall('--token-file[= ]+(/[A-Za-z0-9_.\\/-]+)') | first) | default('') }}
+      no_log: true
+
+    - name: Require PVE token-file argument with a safe absolute path
+      ansible.builtin.assert:
+        that:
+          - cf70_pve_token_path is match('^/[A-Za-z0-9_.\\/-]+$')
+        fail_msg: CF70_PVE_EXISTING_TOKEN_FILE_NOT_IDENTIFIED
+
+    - name: Report existing PVE token-file path without its contents
+      ansible.builtin.debug:
+        msg: "CF70_PVE_TOKEN_PATH={{ cf70_pve_token_path }}"
+
     - name: Read PVE systemd activation time without changing its service
       ansible.builtin.command:
         argv:
