@@ -1,0 +1,179 @@
+---
+# HOME PBS source for CORE Pull Sync: grant the minimum source-reader role.
+# No retention, datastore, backup jobs, sync jobs or existing principals modified.
+- name: Define standalone CORE Pull Sync token and root-only source secret path
+  ansible.builtin.set_fact:
+    pbs34_core_token_id: root@pam!core-pull
+    pbs34_core_token_path: /etc/digitalhouses/pbs-core-pull.token
+    pbs34_core_acl_path: "/datastore/{{ pbs34_store }}"
+    pbs34_core_repo: "root@pam!core-pull@127.0.0.1:{{ pbs34_store }}"
+
+- name: Check for an existing CORE token secret without following symlinks
+  ansible.builtin.stat:
+    path: "{{ pbs34_core_token_path }}"
+    follow: false
+  register: pbs34_core_file
+  no_log: true
+
+- name: Refuse an unsafe pre-existing token secret file
+  ansible.builtin.assert:
+    that:
+      - >-
+        not pbs34_core_file.stat.exists or
+        (pbs34_core_file.stat.isreg | default(false) and
+         pbs34_core_file.stat.pw_name == 'root' and
+         pbs34_core_file.stat.mode == '0600')
+    fail_msg: PBS34_CORE_TOKEN_FILE_NOT_PRIVATE
+  no_log: true
+
+- name: Identify only the dedicated CORE token
+  ansible.builtin.set_fact:
+    pbs34_core_existing: >-
+      {{ (pbs34_tokens_raw.stdout | from_json)
+         | selectattr('tokenid','equalto',pbs34_core_token_id) | list }}
+    pbs34_core_acl_existing: >-
+      {{ (pbs34_acl_raw.stdout | from_json)
+         | selectattr('ugid','equalto',pbs34_core_token_id) | list }}
+
+- name: Protect existing source credentials and refuse conflicting rights
+  ansible.builtin.assert:
+    that:
+      - pbs34_core_existing | length <= 1
+      - (pbs34_core_existing | length == 1) == (pbs34_core_file.stat.exists | bool)
+      - pbs34_core_acl_existing | rejectattr('path','equalto',pbs34_core_acl_path) | list | length == 0
+      - pbs34_core_acl_existing | rejectattr('roleid','in',['DatastoreReader','DatastoreAudit']) | list | length == 0
+    fail_msg: PBS34_CORE_EXISTING_TOKEN_OR_ACL_CONFLICT
+  no_log: true
+
+- name: Create only one dedicated HOME PBS token for CORE
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - user
+      - generate-token
+      - root@pam
+      - core-pull
+      - --comment
+      - "Read-only CORE PBS pull of {{ pbs34_store }}"
+  register: pbs34_core_generated
+  changed_when: true
+  when: pbs34_core_existing | length == 0
+  no_log: true
+
+- name: Parse the one-time token without printing it
+  ansible.builtin.set_fact:
+    pbs34_core_generated_json: >-
+      {{ pbs34_core_generated.stdout |
+         regex_search('(?s)\\{.*\\}') | from_json }}
+  when: pbs34_core_existing | length == 0
+  no_log: true
+
+- name: Require a valid new token identity and secret
+  ansible.builtin.assert:
+    that:
+      - pbs34_core_generated_json.tokenid == pbs34_core_token_id
+      - pbs34_core_generated_json.value | length > 30
+    fail_msg: PBS34_CORE_TOKEN_RESPONSE_INVALID
+  when: pbs34_core_existing | length == 0
+  no_log: true
+
+- name: Persist one-time token secret on the HOME media VM root-only
+  ansible.builtin.copy:
+    dest: "{{ pbs34_core_token_path }}"
+    content: "{{ pbs34_core_generated_json.value }}\n"
+    owner: root
+    group: root
+    mode: '0600'
+  when: pbs34_core_existing | length == 0
+  no_log: true
+
+- name: Grant only read and audit on the source datastore
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - acl
+      - update
+      - "{{ pbs34_core_acl_path }}"
+      - "{{ item }}"
+      - --auth-id
+      - "{{ pbs34_core_token_id }}"
+  loop: [DatastoreReader, DatastoreAudit]
+  when: item not in (pbs34_core_acl_existing | map(attribute='roleid') | list)
+  changed_when: true
+
+- name: Read persisted ACLs for only the new token
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, acl, list, --output-format, json]
+  register: pbs34_core_acl_after_raw
+  changed_when: false
+  no_log: true
+
+- name: Select the persisted CORE source ACLs
+  ansible.builtin.set_fact:
+    pbs34_core_acl_after: >-
+      {{ (pbs34_core_acl_after_raw.stdout | from_json)
+         | selectattr('ugid','equalto',pbs34_core_token_id) | list }}
+
+- name: Require only DatastoreReader and DatastoreAudit on one source path
+  ansible.builtin.assert:
+    that:
+      - pbs34_core_acl_after | length == 2
+      - pbs34_core_acl_after | map(attribute='path') | unique | list == [pbs34_core_acl_path]
+      - pbs34_core_acl_after | map(attribute='roleid') | sort | list == ['DatastoreAudit','DatastoreReader']
+    fail_msg: PBS34_CORE_ACL_READBACK_FAILED
+
+- name: Load the private token secret only into protected Ansible memory
+  ansible.builtin.slurp:
+    src: "{{ pbs34_core_token_path }}"
+  register: pbs34_core_secret_file
+  no_log: true
+
+- name: Retain secret only in memory for a single protected DEV delivery
+  ansible.builtin.set_fact:
+    pbs34_core_token_secret: "{{ pbs34_core_secret_file.content | b64decode | trim }}"
+  no_log: true
+
+- name: Read available namespaces with the new limited token
+  ansible.builtin.command:
+    argv: [proxmox-backup-client, namespace, list, --max-depth, '7', --output-format, json]
+  environment:
+    PBS_REPOSITORY: "{{ pbs34_core_repo }}"
+    PBS_PASSWORD_FILE: "{{ pbs34_core_token_path }}"
+    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found[0] }}"
+  register: pbs34_core_namespaces_raw
+  changed_when: false
+  no_log: true
+
+- name: Read backup groups in the root source namespace
+  ansible.builtin.command:
+    argv: [proxmox-backup-client, list, --output-format, json]
+  environment:
+    PBS_REPOSITORY: "{{ pbs34_core_repo }}"
+    PBS_PASSWORD_FILE: "{{ pbs34_core_token_path }}"
+    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found[0] }}"
+  register: pbs34_core_groups_raw
+  changed_when: false
+  no_log: true
+
+- name: Read backup snapshots in the root source namespace
+  ansible.builtin.command:
+    argv: [proxmox-backup-client, snapshot, list, --output-format, json]
+  environment:
+    PBS_REPOSITORY: "{{ pbs34_core_repo }}"
+    PBS_PASSWORD_FILE: "{{ pbs34_core_token_path }}"
+    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found[0] }}"
+  register: pbs34_core_snapshots_raw
+  changed_when: false
+  no_log: true
+
+- name: Report source inventory accessible to the new read-only token
+  ansible.builtin.debug:
+    msg:
+      - "PBS34_CORE_SOURCE={{ pbs34_store }} NS_ROOT=/"
+      - "PBS34_CORE_NAMESPACES={{ (pbs34_core_namespaces_raw.stdout | from_json) }}"
+      - "PBS34_CORE_ROOT_GROUPS={{ (pbs34_core_groups_raw.stdout | from_json) }}"
+      - "PBS34_CORE_ROOT_SNAPSHOT_COUNT={{ (pbs34_core_snapshots_raw.stdout | from_json) | length }}"
+      - "PBS34_CORE_TOKEN_ID={{ pbs34_core_token_id }}"
+      - "PBS34_CORE_ACL=DatastoreReader,DatastoreAudit on {{ pbs34_core_acl_path }}"
+      - "PBS34_CORE_TLS_SHA256={{ pbs34_fingerprint_found[0] }}"
+      - "PBS34_CORE_SECRET_ON_HOME_VM={{ pbs34_core_token_path }} (root-only; never logged)"

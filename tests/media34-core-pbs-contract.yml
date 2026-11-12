@@ -1,0 +1,32 @@
+---
+- name: Verify HOME PBS CORE reader contract is explicitly opt-in
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    pb: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media34-core-pbs.yml') | from_yaml }}"
+    token_tasks: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-core-pull-token.yml') | from_yaml }}"
+    core_entries: "{{ cat.tasks | selectattr('name','equalto','34-HOME PBS для CORE') | list }}"
+  tasks:
+    - name: Parse token tasks without executing them
+      ansible.builtin.import_tasks: ../tasks/media34-core-pull-token.yml
+      when: false
+
+    - name: Verify audit default and sole dedicated CORE token path
+      ansible.builtin.assert:
+        that:
+          - core_entries | length == 1
+          - core_entries[0].survey_vars[0].default_value == 'audit'
+          - core_entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','apply']
+          - pb | length == 4
+          - token_tasks | to_json is search('root@pam!core-pull')
+          - token_tasks | to_json is search('DatastoreReader')
+          - token_tasks | to_json is search('DatastoreAudit')
+          - token_tasks | to_json is not search('DatastoreAdmin')
+          - token_tasks | to_json is not search('method.*DELETE')
+          - token_tasks | to_json is not search('datastore.*remove')
+          - token_tasks | to_json is not search('prune-job')
+          - token_tasks | to_json is not search('sync-job')
+          - pb[1].tasks | selectattr('name','equalto','Prepare CORE read-only token only when expressly selected') | first | json_query('when') == "pbs34_action == 'apply'"

@@ -1,0 +1,271 @@
+---
+# 34: HOME PBS read-only audit and explicit CORE pull token provisioning.
+# No backup/restore jobs, datastore lifecycle or CORE changes.
+- name: 34 - Resolve existing HOME PBS media guest
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars:
+    pbs34_action: "{{ DH_PBS_CORE_ACTION | default('audit', true) }}"
+    pbs34_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+  tasks:
+    - name: Require explicitly selected safe action and existing GitHub credential
+      ansible.builtin.assert:
+        that:
+          - pbs34_action in ['audit','apply']
+          - pbs34_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - DH_GITHUB_PROVISION_TOKEN | default('',true) | length > 0
+        fail_msg: PBS34_INVALID_SITE_OR_ACTION
+      no_log: true
+
+    - name: Read exact site identity from the approved site repository
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/DigitalHouses/site-{{ pbs34_site_id }}/contents/inventories/{{ pbs34_site_id }}/site.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+          Accept: application/vnd.github+json
+        use_proxy: false
+        status_code: 200
+      register: pbs34_site_file
+      changed_when: false
+      no_log: true
+
+    - name: Read exact media VM identity from the approved site repository
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/DigitalHouses/site-{{ pbs34_site_id }}/contents/inventories/{{ pbs34_site_id }}/media_vm.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+          Accept: application/vnd.github+json
+        use_proxy: false
+        status_code: 200
+      register: pbs34_media_file
+      changed_when: false
+      no_log: true
+
+    - name: Decode site and existing media VM specifications
+      ansible.builtin.set_fact:
+        pbs34_site: "{{ (pbs34_site_file.json.content | b64decode | from_yaml).site }}"
+        pbs34_media: "{{ (pbs34_media_file.json.content | b64decode | from_yaml).media_vm }}"
+      no_log: true
+
+    - name: Require matching existing guest and standard datastore name
+      ansible.builtin.assert:
+        that:
+          - pbs34_site.id == pbs34_site_id
+          - pbs34_media.name == 'mediaserver-' ~ pbs34_site.owner_slug
+          - pbs34_media.network.ipv4 is match('^[0-9]+(\\.[0-9]+){3}/24$')
+          - pbs34_media.storage.pool_name == pbs34_site.owner_slug ~ '-pool'
+          - pbs34_media.vmid | int > 0
+        fail_msg: PBS34_CANONICAL_GUEST_CONFLICT
+
+    - name: Inspect the existing trusted media VM SSH identity
+      ansible.builtin.stat:
+        path: /var/lib/semaphore/.ssh/media80_known_hosts
+        follow: false
+      register: pbs34_pin
+
+    - name: Require pinned known hosts from the previously accepted media deployment
+      ansible.builtin.assert:
+        that:
+          - pbs34_pin.stat.isreg | default(false)
+          - pbs34_pin.stat.pw_name == 'semaphore'
+          - pbs34_pin.stat.mode == '0600'
+        fail_msg: PBS34_MEDIA_PIN_UNAVAILABLE
+
+    - name: Register the existing media guest without changing it
+      ansible.builtin.add_host:
+        name: pbs34_media_guest
+        groups: pbs34_media_hosts
+        ansible_host: "{{ pbs34_media.network.ipv4.split('/')[0] }}"
+        ansible_connection: ssh
+        ansible_user: debian
+        ansible_become: true
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/media80_known_hosts
+          -o ConnectTimeout=10
+        pbs34_action: "{{ pbs34_action }}"
+        pbs34_site: "{{ pbs34_site }}"
+        pbs34_media: "{{ pbs34_media }}"
+        pbs34_store: "pbs-{{ pbs34_site.owner_slug }}"
+      changed_when: false
+      no_log: true
+
+- name: 34 - Audit native HOME PBS without touching backup jobs or data
+  hosts: pbs34_media_hosts
+  become: true
+  gather_facts: false
+  tasks:
+    - name: Verify the exact existing media hostname
+      ansible.builtin.command:
+        argv: [hostname, -s]
+      register: pbs34_hostname
+      changed_when: false
+      failed_when: pbs34_hostname.stdout | trim != pbs34_media.name
+
+    - name: Inspect PBS package versions
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, versions]
+      register: pbs34_versions
+      changed_when: false
+
+    - name: Check the existing PBS proxy is active
+      ansible.builtin.command:
+        argv: [systemctl, is-active, proxmox-backup-proxy.service]
+      register: pbs34_proxy
+      changed_when: false
+      failed_when: pbs34_proxy.stdout | trim != 'active'
+
+    - name: Read all existing datastore definitions
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, list, --output-format, json]
+      register: pbs34_stores_raw
+      changed_when: false
+
+    - name: Select only the source datastore for CORE
+      ansible.builtin.set_fact:
+        pbs34_stores: "{{ pbs34_stores_raw.stdout | from_json }}"
+        pbs34_store_matches: >-
+          {{ (pbs34_stores_raw.stdout | from_json) |
+             selectattr('name','equalto',pbs34_store) | list }}
+
+    - name: Require exactly one existing HOME source datastore
+      ansible.builtin.assert:
+        that:
+          - pbs34_store_matches | length == 1
+        fail_msg: PBS34_HOME_DATASTORE_MISSING
+
+    - name: Inspect the exact HOME source datastore
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, datastore, show, "{{ pbs34_store }}", --output-format, json]
+      register: pbs34_store_details
+      changed_when: false
+
+    - name: Require canonical path and do not change source storage
+      ansible.builtin.assert:
+        that:
+          - (pbs34_store_details.stdout | from_json).path == '/' ~ pbs34_media.storage.pool_name ~ '/' ~ pbs34_store
+        fail_msg: PBS34_SOURCE_PATH_CHANGED
+
+    - name: Read existing users without exposing passwords
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, list, --output-format, json]
+      register: pbs34_users_raw
+      changed_when: false
+      no_log: true
+
+    - name: Read existing root token identifiers without secrets
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, user, list-tokens, root@pam, --output-format, json]
+      register: pbs34_tokens_raw
+      changed_when: false
+      no_log: true
+
+    - name: Read all existing role assignments without changing any permissions
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, acl, list, --output-format, json]
+      register: pbs34_acl_raw
+      changed_when: false
+      no_log: true
+
+    - name: Read current PBS TLS certificate fingerprint from source server
+      ansible.builtin.command:
+        argv: [proxmox-backup-manager, cert, info]
+      register: pbs34_cert_raw
+      changed_when: false
+
+    - name: Compare the exact SHA-256 certificate fingerprint from CORE
+      ansible.builtin.set_fact:
+        pbs34_fingerprint_found: >-
+          {{ pbs34_cert_raw.stdout | lower |
+             regex_findall('(?m)^fingerprint \\(sha256\\):\\s*([0-9a-f]{2}(?::[0-9a-f]{2}){31})\\s*$') }}
+        pbs34_fingerprint_expected: 69:b6:a4:47:18:b2:b9:87:f3:40:2b:16:96:04:73:e9:8b:e0:5e:53:5f:da:f2:11:ea:56:d2:ed:08:cb:54:db
+
+    - name: Require exact TLS fingerprint match before provisioning CORE access
+      ansible.builtin.assert:
+        that:
+          - pbs34_fingerprint_found | length == 1
+          - pbs34_fingerprint_found[0] == pbs34_fingerprint_expected
+        fail_msg: PBS34_TLS_FINGERPRINT_MISMATCH
+
+    - name: Summarize existing PBS principals and source datastore nonsecret metadata
+      ansible.builtin.debug:
+        msg:
+          - "PBS34_SITE={{ pbs34_site.id }} VM={{ pbs34_media.vmid }} IP={{ ansible_host }}"
+          - "PBS34_VERSIONS={{ pbs34_versions.stdout_lines | first }}"
+          - "PBS34_PROXY={{ pbs34_proxy.stdout | trim }}"
+          - "PBS34_DATASTORES={{ pbs34_stores | map(attribute='name') | list }}"
+          - "PBS34_SOURCE={{ pbs34_store }} PATH={{ (pbs34_store_details.stdout | from_json).path }}"
+          - "PBS34_USERS={{ (pbs34_users_raw.stdout | from_json) | map(attribute='userid') | list }}"
+          - "PBS34_ROOT_TOKEN_IDS={{ (pbs34_tokens_raw.stdout | from_json) | map(attribute='tokenid') | list }}"
+          - "PBS34_ACL_COUNT={{ (pbs34_acl_raw.stdout | from_json) | length }}"
+          - "PBS34_TLS_SHA256={{ pbs34_fingerprint_found[0] }}"
+          - "PBS34_MODE={{ pbs34_action }}"
+
+    - name: Prepare CORE read-only token only when expressly selected
+      ansible.builtin.include_tasks: ../tasks/media34-core-pull-token.yml
+      when: pbs34_action == 'apply'
+
+- name: 34 - Register existing DEV for secure, non-CORE token handoff
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars:
+    pbs34_action: "{{ DH_PBS_CORE_ACTION | default('audit', true) }}"
+  tasks:
+    - name: Reuse established Runner to DEV SSH destination only for apply
+      ansible.builtin.add_host:
+        name: pbs34_dev_1254
+        groups: pbs34_dev_delivery
+        ansible_host: 192.168.11.254
+        ansible_connection: ssh
+        ansible_user: dev
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          -o ConnectTimeout=10
+        ansible_python_interpreter: /usr/bin/python3
+      when: pbs34_action == 'apply'
+      changed_when: false
+
+- name: 34 - Deliver only the protected HOME token secret to DEV, never CORE
+  hosts: pbs34_dev_delivery
+  gather_facts: false
+  become: false
+  vars:
+    pbs34_dev_secret_path: >-
+      /home/dev/.config/ansible-home/{{ hostvars['pbs34_media_guest'].pbs34_site.id }}-pbs-core-pull.secret
+  tasks:
+    - name: Require the already-established DEV private credentials directory
+      ansible.builtin.stat:
+        path: /home/dev/.config/ansible-home
+      register: pbs34_dev_dir
+      no_log: true
+
+    - name: Refuse non-private or absent DEV credential destination
+      ansible.builtin.assert:
+        that:
+          - pbs34_dev_dir.stat.isdir | default(false)
+          - pbs34_dev_dir.stat.pw_name == 'dev'
+          - pbs34_dev_dir.stat.mode in ['0700','0750']
+        fail_msg: PBS34_DEV_CREDENTIAL_DIRECTORY_NOT_PRIVATE
+      no_log: true
+
+    - name: Stage HOME source token for manual CORE Semaphore 05 secret entry
+      ansible.builtin.copy:
+        dest: "{{ pbs34_dev_secret_path }}"
+        content: "{{ hostvars['pbs34_media_guest'].pbs34_core_token_secret }}\n"
+        owner: dev
+        group: dev
+        mode: '0600'
+      no_log: true
+
+    - name: Report the secret handoff location without printing its contents
+      ansible.builtin.debug:
+        msg:
+          - "PBS34_DEV_HANDOFF_FILE={{ pbs34_dev_secret_path }}"
+          - "PBS34_DEV_HANDOFF_MODE=0600; secret not in chat, Git or Semaphore logs"
+          - "PBS34_CORE_SEMAPHORE_05=enter this token secret through its protected secret input; CORE not modified"
