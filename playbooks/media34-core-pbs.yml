@@ -127,6 +127,7 @@
         msg:
           - "PBS34_PVE_BACKUP_JOBS={{ (pbs34_pve_jobs.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
           - "PBS34_PVE_STORAGES={{ (pbs34_pve_storages.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_storages.rc == 0 else 'UNAVAILABLE' }}"
+          - "PBS34_PVE_BACKUP_DEFINITIONS={{ (pbs34_pve_jobs.stdout | from_json) if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
 
     - name: Register the existing media guest without changing it
       ansible.builtin.add_host:
@@ -173,6 +174,39 @@
       register: pbs34_proxy
       changed_when: false
       failed_when: pbs34_proxy.stdout | trim != 'active'
+
+    - name: Read actual ZFS pools before diagnosing missing PBS source
+      ansible.builtin.command:
+        argv: [zpool, list, -H, -o, name,size,alloc,free,health]
+      register: pbs34_zpool_inventory
+      changed_when: false
+
+    - name: Read the imported media pool and child filesystems
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -r, -o, name,mountpoint,used,avail, "{{ pbs34_media.storage.pool_name }}"]
+      register: pbs34_zfs_inventory
+      changed_when: false
+      failed_when: false
+
+    - name: Check the pre-existing media backup export directory
+      ansible.builtin.stat:
+        path: "{{ pbs34_media.backup_export.path }}"
+        follow: false
+      register: pbs34_old_backup_path
+
+    - name: Check existing backup directory under the ZFS media pool
+      ansible.builtin.stat:
+        path: "/{{ pbs34_media.storage.pool_name }}/backups"
+        follow: false
+      register: pbs34_backup_parent
+
+    - name: Report actual pool and backup directories without modifying either
+      ansible.builtin.debug:
+        msg:
+          - "PBS34_ZPOOL={{ pbs34_zpool_inventory.stdout_lines }}"
+          - "PBS34_ZFS_FILESYSTEMS={{ pbs34_zfs_inventory.stdout_lines if pbs34_zfs_inventory.rc == 0 else 'SOURCE_POOL_NOT_AVAILABLE' }}"
+          - "PBS34_MEDIA_EXPORT_PATH={{ pbs34_media.backup_export.path }} EXISTS={{ pbs34_old_backup_path.stat.exists | default(false) }}"
+          - "PBS34_BACKUPS_PARENT_EXISTS={{ pbs34_backup_parent.stat.exists | default(false) }}"
 
     - name: Check whether the intended PBS ZFS dataset exists without creating it
       ansible.builtin.command:
