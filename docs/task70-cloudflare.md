@@ -1,6 +1,6 @@
 # №70 — Cloudflare HOME
 
-**Состояние на 13.11.2026:** аудит, перенос коннектора и независимая публикация Semaphore/Webmin реализованы и проверены. **В работу №70 включён private route HOME PBS** (`192.168.11.223/32` для `serzhan-home`): штатная публикация через существующий Tunnel, API readback и идемпотентность. Проверку реального транспорта после публикации выполняет **Ansible-CORE №40**. HAOS mTLS и дополнительные маршруты PVE/File Browser остаются отдельными задачами.
+**Состояние на 13.11.2026:** аудит, перенос коннектора, публикация Semaphore/Webmin и **private route PBS** реализованы и проверены. PBS `192.168.11.223/32` опубликован через существующий Tunnel без нового коннектора; Cloudflare API readback и идемпотентность подтверждены. Следующий этап — проверка реального транспорта в **Ansible-CORE №40**. HAOS mTLS и дополнительные маршруты PVE/File Browser остаются отдельными задачами.
 
 ## Архитектура
 
@@ -34,6 +34,10 @@
 | №70 #69 | Webmin: маршрут и существующий CNAME исправлены, `changed=2` |
 | №70 #70 | Четыре ingress-маршрута и четыре DNS подтверждены |
 | №70 #71, #72 | Повторная публикация каждого сервиса: `changed=0`, `failed=0` |
+| №00 #81 | Новое действие `publish_pbs_private` добавлено в существующий шаблон №70 (ID 9) |
+| №70 #82 | Первый запуск остановлен на проверке исходного HTTP-кода с PVE, до изменений Cloudflare |
+| №70 #83 | **PBS private CIDR `192.168.11.223/32` создан**, `changed=1`, `failed=0`; origin PVE→PBS HTTP 200 |
+| №70 #84 | Повторный запуск **`changed=0`, `failed=0`**: повторный GET Cloudflare API подтвердил ту же запись и UUID |
 
 Четыре публичных адреса (PVE, File Browser, Semaphore, Webmin) дают анонимному пользователю редирект **HTTP 302 на Cloudflare Access**. Общая wildcard Access-политика содержит email-allow и не содержит Everyone/bypass.
 
@@ -42,6 +46,6 @@
 ## Границы и последующие работы
 
 - HAOS mobile mTLS: отдельная операция №70, без изменения действующих маршрутов до проверки сертификатов/Access.
-- **Private PBS — задача №70 (в плане и реализации):** `CORE → Cloudflare → существующий HOME PVE connector → HOME PBS VM:8007`. Для `serzhan-home` точный CIDR `192.168.11.223/32` из media-манифеста, без публичного PBS hostname. Действие `publish_pbs_private` проверяет здоровый Tunnel, доступность PBS с PVE, конфликт private routes, затем создаёт только отсутствующий CIDR через Cloudflare API. После создания повторное чтение подтверждает CIDR и исходный UUID Tunnel; повторное применение не должно менять конфигурацию. Реальный транспорт через Cloudflare One Client/WARP **не проверяется HOME**, это приёмка **Ansible-CORE №40**. Маршруты PVE/File Browser, DNS и Access не изменяются.
+- **Private PBS — выполнено в №70:** `CORE → Cloudflare → существующий HOME PVE connector → HOME PBS VM:8007`. Для `serzhan-home`: `192.168.11.223/32`, **Cloudflare route ID `eebd7ec3-e1dd-46eb-95e7-9f6a85f16905`**, Tunnel UUID `6a04d9cd-0b17-48f3-8366-9f86ea08cb24`. IP получен из приватного media-манифеста; PBS с PVE отвечает HTTP 200. Действие `publish_pbs_private` проверяет статус существующего коннектора, origin и конфликты маршрутов и создаёт только отсутствующий CIDR через `POST /teamnet/routes`. `GET` Cloudflare API подтвердил route ID, CIDR и Tunnel UUID; повторный запуск `changed=0`. **Проверку реального транспорта через Cloudflare One Client/WARP выполняет Ansible-CORE №40**, HOME не претендует на сквозной сетевой тест. Новых DNS, Access-приложений, Tunnel и сервисов не создавалось; CORE не изменялся.
 - Если потребуются новые маршруты PVE/File Browser для других домов, их добавление должно быть отдельным выбором в №70, без использования исторической №15.
 - Центральный PBS, Sync Jobs и хранение резервных копий — **Ansible-CORE**, не HOME.
