@@ -2,7 +2,8 @@
 
 Native Ansible + Semaphore for independently managed HOME/office sites.
 
-Scope: 00/05/08 bootstrap, 10 PVE, 30/31/33 media and local PBS, 60 agents.
+Scope: 00/05/08 bootstrap, 10 PVE, 30/31/33 media and local PBS, 34 HOME PBS read-only access preparation for CORE, 60 agents.
+Task 34 audit is verified, but its CORE token apply is blocked until the HOME PBS datastore actually exists; see docs/task34-home-pbs-core.md.
 Cloudflare task 70 (Semaphore template ID 9) is the sole routine Cloudflare
 controller. It reuses the existing site Tunnel and PVE connector and manages
 Semaphore and Webmin routes plus the HOME PBS private /32 route, with working
