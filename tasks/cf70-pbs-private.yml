@@ -62,7 +62,7 @@
       - --silent
       - --show-error
       - --noproxy
-      - '*'
+      - "{{ cf70_pbs_ip }}"
       - --max-time
       - '10'
       - --output
@@ -73,11 +73,15 @@
   register: cf70_pbs_origin
   changed_when: false
 
+- name: Report only the numeric PBS origin probe outcome
+  ansible.builtin.debug:
+    msg: "CF70_PBS_PVE_PROBE_RC={{ cf70_pbs_origin.rc }} HTTP={{ cf70_pbs_origin.stdout | trim }}"
+
 - name: Require the PBS HTTPS origin to respond before any Cloudflare write
   ansible.builtin.assert:
     that:
       - cf70_pbs_origin.rc == 0
-      - cf70_pbs_origin.stdout == '200'
+      - cf70_pbs_origin.stdout | trim == '200'
     fail_msg: CF70_PBS_PRIVATE_ORIGIN_UNAVAILABLE_FROM_PVE
 
 - name: Read existing private routes that cover the requested host
