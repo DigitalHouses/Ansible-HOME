@@ -1,0 +1,77 @@
+---
+# Native Ansible SSH transport from site Runner to the existing central DEV.
+# The home Runner SSH public key is enrolled once in DEV authorized_keys.
+# No new daemon, PVE pct proxy, token logging or central DEV elevation.
+- name: Verify target is the existing non-root DEV account
+  ansible.builtin.command:
+    argv: [/usr/bin/id, -un]
+  register: dev_linux_identity
+  changed_when: false
+
+- name: Refuse any target other than the expected DEV account
+  ansible.builtin.assert:
+    that: dev_linux_identity.stdout == 'dev'
+    fail_msg: HOME_DEV_SSH_WRONG_ACCOUNT
+
+- name: Keep a private directory for per-site API credentials
+  ansible.builtin.file:
+    path: "{{ dev_dir }}"
+    state: directory
+    owner: dev
+    group: dev
+    mode: '0700'
+
+- name: Deliver dedicated site token without displaying it
+  ansible.builtin.copy:
+    dest: "{{ dev_curl_path }}"
+    content: "{{ hostvars['runner'].dev_transfer_config.content | b64decode }}"
+    owner: dev
+    group: dev
+    mode: '0600'
+  no_log: true
+
+- name: Verify DEV's new Semaphore API identity
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/curl
+      - -q
+      - -sS
+      - -K
+      - "{{ dev_curl_path }}"
+      - "{{ dev_api_url }}/user/"
+  register: dev_api_identity
+  changed_when: false
+  no_log: true
+
+- name: Require dedicated nonadmin DEV identity
+  ansible.builtin.assert:
+    that:
+      - (dev_api_identity.stdout | from_json).username == 'dev-automation'
+      - not (dev_api_identity.stdout | from_json).admin
+    fail_msg: HOME_DEV_API_IDENTITY_REJECTED
+  no_log: true
+
+- name: Verify DEV can see only this Semaphore project
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/curl
+      - -q
+      - -sS
+      - -K
+      - "{{ dev_curl_path }}"
+      - "{{ dev_api_url }}/projects"
+  register: dev_project_access
+  changed_when: false
+  no_log: true
+
+- name: Require the expected site-scoped project
+  ansible.builtin.assert:
+    that:
+      - (dev_project_access.stdout | from_json) | length == 1
+      - (dev_project_access.stdout | from_json)[0].name == dev_site_id
+    fail_msg: HOME_DEV_API_SCOPE_REJECTED
+  no_log: true
+
+- name: Confirm successful DEV API enrollment
+  ansible.builtin.debug:
+    msg: "DEV_ACCESS=PASS site={{ dev_site_id }} endpoint={{ dev_api_url }} user=dev-automation"

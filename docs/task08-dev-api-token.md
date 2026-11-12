@@ -5,7 +5,10 @@ Owner: Ansible-HOME. This task reuses the existing Semaphore project, `dev-autom
 ## Survey: `DH_DEV_API_TOKEN_ACTION`
 
 - `keep` (default): use the existing managed token; if missing, create a new one. An invalid managed token is an error, not an invitation to silently replace it.
-- `rotate`: deliberately mint a fresh token for `dev-automation`, verify its identity/permissions, update Runner's root-only file and curl configuration through Ansible's normal file management, deliver to the existing central DEV via PVE `pct push`, and test the identity and project membership **from DEV**. Only then expire the previous token, if it is present in the dedicated user's token list. If delivery fails, the former token is not revoked.
+- `probe`: check Runner → DEV SSH with the existing Runner key without touching tokens; expose only the Runner's **public** SSH key for one-time enrollment on DEV.
+- `rotate`: deliberately mint a fresh token for `dev-automation`, verify its identity/permissions, update Runner's root-only file and curl configuration through Ansible's normal file management, deliver to the existing central DEV via native Ansible SSH as the unprivileged `dev` user, and test the identity and project membership **from DEV**. Only then expire the previous token, if it is present in the dedicated user's token list. If delivery fails, the former token is not revoked.
+
+Central DEV is `dh-core / DEV — CT1254, 192.168.11.254` on the CORE PVE (`192.168.11.240`), **not** on `serzhan-home / PVE` (`192.168.11.220`). Task 08 never uses `pct exec` against a HOME PVE to manage central DEV. The current site Runner reaches DEV directly via existing LAN SSH; remote-site transport will require an appropriate future Cloudflare private route before this can be used there.
 
 Current destination on DEV: `/home/dev/.config/ansible-home/<site-id>.curl` (mode 0600). The older `/home/dev/.config/ansible-3/` configuration is legacy and is not the new source of truth.
 

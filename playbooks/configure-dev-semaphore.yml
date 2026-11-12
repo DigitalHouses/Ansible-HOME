@@ -21,6 +21,49 @@
       Authorization: "Bearer {{ sem_cf_token }}"
       Accept: application/json
   tasks:
+    - name: Read Runner public key for the requested DEV SSH probe
+      ansible.builtin.command:
+        argv: [/usr/bin/cat, /var/lib/semaphore/.ssh/id_ed25519.pub]
+      register: dev_probe_public_key
+      changed_when: false
+      when: dev_token_action == 'probe'
+
+    - name: Expose only the public SSH key for authorized DEV enrollment
+      ansible.builtin.debug:
+        msg: "HOME_RUNNER_PUBLIC_SSH_KEY={{ dev_probe_public_key.stdout }}"
+      when: dev_token_action == 'probe'
+
+    - name: Test the Runner's existing SSH credential against central DEV
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=accept-new
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - dev@192.168.11.254
+          - /usr/bin/id
+          - -un
+      register: dev_probe_connection
+      changed_when: false
+      failed_when: false
+      when: dev_token_action == 'probe'
+
+    - name: Report DEV SSH probe without changing API credentials
+      ansible.builtin.debug:
+        msg: "DEV_SSH_PROBE_RC={{ dev_probe_connection.rc }} identity={{ dev_probe_connection.stdout }}"
+      when: dev_token_action == 'probe'
+
+    - name: Stop after the requested SSH-only probe
+      ansible.builtin.meta: end_play
+      when: dev_token_action == 'probe'
+
     - name: Read this Runner's site identity
       ansible.builtin.slurp:
         src: /etc/digitalhouses/site-id
@@ -153,19 +196,18 @@
         - sem_cf_action == 'apply'
         - not sem_public_web_host_config.changed
 
-    - name: Register the existing pinned PVE SSH connection
+    - name: Register existing central DEV as a direct SSH destination
       ansible.builtin.add_host:
-        name: dev_delivery_pve
+        name: central_dev_1254
         groups: dev_delivery_hosts
-        ansible_host: "{{ pve.ipv4 }}"
-        ansible_user: root
+        ansible_host: 192.168.11.254
+        ansible_user: dev
         ansible_connection: ssh
         ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
         ansible_ssh_common_args: >-
-          -o StrictHostKeyChecking=yes -o ConnectTimeout=10
+          -o StrictHostKeyChecking=accept-new -o ConnectTimeout=10
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
         ansible_python_interpreter: /usr/bin/python3
-        expected_pve_node: "{{ pve.node }}"
       changed_when: false
 
 - name: 08 - Deliver and verify dedicated API access in central DEV
@@ -173,16 +215,14 @@
   gather_facts: false
   become: false
   vars:
-    dev_ctid: '1254'
-    dev_ip_cidr: 192.168.11.254/24
     dev_dir: /home/dev/.config/ansible-home
     dev_site_id: "{{ hostvars['runner'].dev_site_id }}"
     dev_runner_ip: "{{ hostvars['runner'].dev_runner_ip }}"
     dev_api_url: "http://{{ dev_runner_ip }}/api"
     dev_curl_path: "{{ dev_dir }}/{{ dev_site_id }}.curl"
   tasks:
-    - name: Use the shared transport without introducing another service
-      ansible.builtin.include_tasks: ../tasks/dev-delivery.yml
+    - name: Install and verify credential via standard Ansible SSH
+      ansible.builtin.include_tasks: ../tasks/dev-ssh-delivery.yml
 
 - name: 08 - Expire superseded DEV token only after confirmed DEV delivery
   hosts: runner
@@ -191,6 +231,7 @@
   gather_facts: false
   vars:
     semaphore_api: http://127.0.0.1/api
+    dev_token_action: "{{ DH_DEV_API_TOKEN_ACTION | default('keep', true) }}"
   tasks:
     - name: Find the previous token in the dedicated user's token list
       ansible.builtin.uri:

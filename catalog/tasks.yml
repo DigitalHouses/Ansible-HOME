@@ -35,6 +35,7 @@ tasks:
         values:
           - {name: "Использовать существующий токен (по умолчанию)", value: keep}
           - {name: "Перевыпустить токен и доставить в DEV", value: rotate}
+          - {name: "Проверить SSH-доступ Runner → DEV (без изменений токена)", value: probe}
       - name: DH_SEMAPHORE_CF_ACTION
         title: "Cloudflare — Semaphore (общий туннель объекта)"
         type: enum
