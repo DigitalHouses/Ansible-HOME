@@ -165,6 +165,9 @@
       changed_when: false
       no_log: true
 
+    - name: Inspect inherited Semaphore and Webmin routes without modifying them
+      ansible.builtin.include_tasks: ../tasks/cf70-route-audit.yml
+
     - name: Read the legacy Runner connector state, if present
       ansible.builtin.command:
         argv: [/usr/bin/systemctl, is-active, digitalhouses-site-cloudflared.service]

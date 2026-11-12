@@ -1,0 +1,34 @@
+---
+# Read-only audit of the two inherited admin routes.
+- name: Define existing Semaphore and Webmin hostnames
+  ansible.builtin.set_fact:
+    cf70_admin_endpoints:
+      - name: semaphore
+        hostname: "{{ site_id }}-pve-semaphore.{{ cf70_zone_name }}"
+      - name: webmin
+        hostname: "{{ site_id }}-pve-mediaserver-admin.{{ cf70_zone_name }}"
+
+- name: Inspect DNS records for the two inherited admin routes
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records?name={{ item.hostname }}&per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  loop: "{{ cf70_admin_endpoints }}"
+  loop_control:
+    label: "{{ item.name }}"
+  register: cf70_admin_dns
+  changed_when: false
+  no_log: true
+
+- name: Report whether admin routes, DNS and Access applications exist
+  ansible.builtin.debug:
+    msg:
+      - "CF70_ADMIN_{{ item.name | upper }}_HOST={{ item.hostname }}"
+      - "CF70_ADMIN_{{ item.name | upper }}_ROUTE_COUNT={{ cf70_config.json.result.config.ingress | selectattr('hostname','defined') | selectattr('hostname','equalto',item.hostname) | list | length }}"
+      - "CF70_ADMIN_{{ item.name | upper }}_DNS_COUNT={{ cf70_admin_dns.results[index].json.result | length }}"
+      - "CF70_ADMIN_{{ item.name | upper }}_ACCESS_APP_COUNT={{ (cf70_access.json.result | selectattr('domain','defined') | selectattr('domain','equalto',item.hostname) | list | length) + (cf70_access.json.result | selectattr('domain','defined') | selectattr('domain','equalto','*.' ~ cf70_zone_name) | list | length) }}"
+  loop: "{{ cf70_admin_endpoints }}"
+  loop_control:
+    index_var: index
+    label: "{{ item.name }}"
