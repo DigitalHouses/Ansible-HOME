@@ -190,6 +190,7 @@
       when:
         - item.name in (templates.json | map(attribute='name') | list)
         - item.playbook == 'playbooks/media-server-deploy.yml'
+        - current_template.playbook != item.playbook
 
     - name: "Repoint owned task 30 from audit to native deployment"
       ansible.builtin.uri:
