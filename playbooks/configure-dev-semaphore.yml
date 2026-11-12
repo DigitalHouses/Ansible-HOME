@@ -174,7 +174,7 @@
   vars:
     dev_ctid: '1254'
     dev_ip_cidr: 192.168.11.254/24
-    dev_dir: /home/dev/.config/ansible-3
+    dev_dir: /home/dev/.config/ansible-home
     dev_site_id: "{{ hostvars['runner'].dev_site_id }}"
     dev_runner_ip: "{{ hostvars['runner'].dev_runner_ip }}"
     dev_api_url: "http://{{ dev_runner_ip }}/api"
