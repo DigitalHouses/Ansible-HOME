@@ -284,8 +284,28 @@
           - "CF70_ACCESS_APPS={{ cf70_access.json.result | length }} (policies not audited)"
           - "CF70_PVE={{ pve.ipv4 }} cloudflared.service={{ cf70_pve_connector.stdout | default('not confirmed', true) }}"
           - "CF70_RUNNER_LEGACY_SERVICE={{ cf70_runner_connector.stdout | default('not present', true) }}"
-          - "CF70_NO_MUTATION=true"
+          - "CF70_PRECHECK_NO_MUTATION=true"
 
     - name: Move the existing site connector to the existing PVE service
       ansible.builtin.include_tasks: ../tasks/cf70-migrate.yml
-      when: cf70_action == 'migrate'
+      when:
+        - cf70_action == 'migrate'
+        - cf70_runner_connector.stdout == 'active'
+
+    - name: Require a healthy PVE connector when migration was already completed
+      ansible.builtin.assert:
+        that:
+          - cf70_pve_connector.stdout == 'active'
+          - cf70_tunnel.status == 'healthy'
+          - cf70_connections.json.result | length == 1
+        fail_msg: CF70_NO_ACTIVE_SITE_CONNECTOR
+      when:
+        - cf70_action == 'migrate'
+        - cf70_runner_connector.stdout != 'active'
+
+    - name: Report already completed connector migration
+      ansible.builtin.debug:
+        msg: "CF70_MIGRATION=ALREADY_ON_PVE Runner=inactive Tunnel={{ cf70_tunnel.id }}"
+      when:
+        - cf70_action == 'migrate'
+        - cf70_runner_connector.stdout != 'active'

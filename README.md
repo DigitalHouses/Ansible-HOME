@@ -4,9 +4,10 @@ Native Ansible + Semaphore for independently managed HOME/office sites.
 
 Scope: 00/05/08 bootstrap, 10 PVE, 30/31/33 media and local PBS, 60 agents.
 Cloudflare task 70 is the in-place successor of historical task 15
-(Semaphore template ID 9). Its read-only audit is live-tested; route
-publication, connector consolidation, HAOS mTLS and PBS routing remain
-separate follow-up work. Legacy task 32 retains its history until migration.
+(Semaphore template ID 9). The existing site connector now runs on HOME
+PVE; the legacy Semaphore Runner connector is disabled. Audit and migration
+are verified. Additional routes, HAOS mTLS and PBS private routing remain
+separate work. Legacy task 32 retains its history until migration.
 
 There are no central dh-core tasks in this repository.
 

@@ -34,7 +34,7 @@
           - cf70_playbook[0].tasks | to_json is not search('"ansible.builtin.apt"')
           - cf70_playbook[0].tasks | to_json is not search('"ansible.builtin.service"')
           - cf70_playbook[0].tasks | to_json is not search('"ansible.builtin.systemd"')
-          - cf70_playbook[0].tasks | to_json is search('CF70_NO_MUTATION=true')
+          - cf70_playbook[0].tasks | to_json is search('CF70_PRECHECK_NO_MUTATION=true')
 
     - name: Require in-place migration rather than adding a replacement template
       ansible.builtin.assert:
