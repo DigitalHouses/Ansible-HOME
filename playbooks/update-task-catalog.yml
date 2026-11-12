@@ -43,6 +43,10 @@
           - catalog.tasks | length > 0
         fail_msg: Invalid site project or task catalog
 
+    - name: Migrate the existing Cloudflare template to task 70 in-place
+      ansible.builtin.import_tasks: ../tasks/semaphore-home-cf70-cutover.yml
+      when: catalog.tasks | selectattr('name', 'equalto', '70-Cloudflare') | list | length == 1
+
     - name: Read existing task templates
       ansible.builtin.uri:
         url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"

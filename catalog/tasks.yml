@@ -130,47 +130,9 @@ tasks:
           - {name: "bcmxcp_usb — Eaton USB", value: bcmxcp_usb}
           - {name: "tripplite_usb — старый Tripp Lite USB", value: tripplite_usb}
           - {name: "snmp-ups — сетевой", value: snmp-ups}
-  - name: "15-Cloudflare"
-    playbook: playbooks/cloudflare-site.yml
-    description: "Единый Tunnel дома: проверить/создать/пересоздать коннектор, отдельно публиковать PVE и File Browser"
-    survey_vars:
-      - name: DH_CF15_CONNECTOR_ACTION
-        title: "Коннектор общего Cloudflare Tunnel"
-        type: enum
-        target: ""
-        required: true
-        default_value: check
-        values:
-          - {name: "Проверить (без изменений)", value: check}
-          - {name: "Создать (если отсутствует)", value: create}
-          - {name: "ПЕРЕСОЗДАТЬ Tunnel и коннектор (новый UUID)", value: recreate}
-      - name: DH_CF15_PVE_ROUTE
-        title: "Публикация Proxmox PVE"
-        type: enum
-        target: ""
-        required: true
-        default_value: skip
-        values:
-          - {name: "Пропустить", value: skip}
-          - {name: "Создать маршрут в общем Tunnel", value: create}
-      - name: DH_CF15_FILEBROWSER_ROUTE
-        title: "Публикация File Browser Quantum"
-        type: enum
-        target: ""
-        required: true
-        default_value: skip
-        values:
-          - {name: "Пропустить", value: skip}
-          - {name: "Создать маршрут в общем Tunnel", value: create}
-      - name: DH_CF15_CONNECTOR_UPDATE
-        title: "Версия cloudflared на Runner"
-        type: enum
-        target: ""
-        required: true
-        default_value: "no"
-        values:
-          - {name: "Не обновлять", value: "no"}
-          - {name: "Обновить установленный APT-пакет", value: "yes"}
+  - name: "70-Cloudflare"
+    playbook: playbooks/cloudflare-home.yml
+    description: "Аудит действующего Cloudflare Tunnel HOME, коннектора PVE, маршрутов, DNS и Access без изменений"
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"

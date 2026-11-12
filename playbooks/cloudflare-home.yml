@@ -1,0 +1,186 @@
+---
+# HOME task 70: audit the existing one-Tunnel Cloudflare setup.
+# Read-only baseline; intentional service changes will be added only after acceptance.
+- name: 70 - Audit HOME Cloudflare Tunnel, routes and PVE connector
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    cf70_action: "{{ DH_CF70_ACTION | default('audit', true) }}"
+    cf70_token: "{{ DH_CLOUDFLARE_API_TOKEN | default('', true) }}"
+    cf70_api: https://api.cloudflare.com/client/v4
+    cf70_zone_name: digitalhouses.vip
+    cf70_headers:
+      Authorization: "Bearer {{ cf70_token }}"
+      Accept: application/json
+  tasks:
+    - name: Require safe read-only task 70 mode and site credentials
+      ansible.builtin.assert:
+        that:
+          - cf70_action == 'audit'
+          - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - cf70_token | length > 0
+          - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+        fail_msg: "CF70_AUDIT_ONLY_OR_MISSING_TASK05_CREDENTIALS"
+      no_log: true
+
+    - name: Read exact Cloudflare zone
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/zones?name={{ cf70_zone_name }}&per_page=50"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_zones
+      changed_when: false
+      no_log: true
+
+    - name: Select exact zone
+      ansible.builtin.set_fact:
+        cf70_zone_matches: >-
+          {{ cf70_zones.json.result |
+             selectattr('name', 'equalto', cf70_zone_name) | list }}
+
+    - name: Require one Cloudflare account
+      ansible.builtin.assert:
+        that:
+          - cf70_zones.json.success | bool
+          - cf70_zone_matches | length == 1
+          - cf70_zones.json.result_info.total_pages | default(1) | int == 1
+        fail_msg: CF70_ZONE_AMBIGUOUS
+
+    - name: Identify zone and account
+      ansible.builtin.set_fact:
+        cf70_zone_id: "{{ cf70_zone_matches[0].id }}"
+        cf70_account_id: "{{ cf70_zone_matches[0].account.id }}"
+
+    - name: Read site-owned Cloudflare Tunnel
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel?name={{ site_id }}&per_page=100"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_tunnels
+      changed_when: false
+      no_log: true
+
+    - name: Select the existing active site Tunnel
+      ansible.builtin.set_fact:
+        cf70_tunnel_matches: >-
+          {{ cf70_tunnels.json.result |
+             selectattr('name', 'equalto', site_id) |
+             selectattr('deleted_at', 'none') | list }}
+
+    - name: Refuse missing, duplicate or locally configured Tunnel
+      ansible.builtin.assert:
+        that:
+          - cf70_tunnels.json.success | bool
+          - cf70_tunnels.json.result_info.total_pages | default(1) | int == 1
+          - cf70_tunnel_matches | length == 1
+          - cf70_tunnel_matches[0].config_src == 'cloudflare'
+        fail_msg: CF70_EXISTING_SITE_TUNNEL_REQUIRED
+
+    - name: Keep verified immutable Tunnel ID
+      ansible.builtin.set_fact:
+        cf70_tunnel: "{{ cf70_tunnel_matches[0] }}"
+
+    - name: Read remotely managed ingress routes
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_config
+      changed_when: false
+      no_log: true
+
+    - name: Require a valid site ingress with terminal 404
+      ansible.builtin.assert:
+        that:
+          - cf70_config.json.success | bool
+          - cf70_config.json.result.config.ingress | length >= 1
+          - cf70_config.json.result.config.ingress[-1].service == 'http_status:404'
+        fail_msg: CF70_INGRESS_INVALID
+
+    - name: Read existing connector connections
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/connections"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_connections
+      changed_when: false
+      no_log: true
+
+    - name: Read existing managed public hostnames
+      ansible.builtin.set_fact:
+        cf70_hosts: >-
+          {{ cf70_config.json.result.config.ingress |
+             selectattr('hostname', 'defined') | map(attribute='hostname') | list }}
+
+    - name: Audit DNS for each existing ingress hostname
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records?name={{ item }}&per_page=100"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_dns
+      loop: "{{ cf70_hosts }}"
+      loop_control:
+        label: "{{ item }}"
+      changed_when: false
+      no_log: true
+
+    - name: Read known Access applications without changing policies
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/access/apps?per_page=100"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_access
+      changed_when: false
+      no_log: true
+
+    - name: Read the legacy Runner connector state, if present
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, is-active, digitalhouses-site-cloudflared.service]
+      register: cf70_runner_connector
+      changed_when: false
+      failed_when: false
+
+    - name: Probe HOME PVE cloudflared systemd service read-only over pinned SSH
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/systemctl
+          - is-active
+          - cloudflared.service
+      register: cf70_pve_connector
+      changed_when: false
+      failed_when: false
+
+    - name: Report the read-only HOME Cloudflare baseline
+      ansible.builtin.debug:
+        msg:
+          - "CF70_MODE=AUDIT_ONLY"
+          - "CF70_TUNNEL={{ site_id }} UUID={{ cf70_tunnel.id }} STATUS={{ cf70_tunnel.status }}"
+          - "CF70_CONNECTORS={{ cf70_connections.json.result | length }}"
+          - "CF70_PUBLIC_ROUTES={{ cf70_hosts | join(', ') }}"
+          - "CF70_DNS={{ cf70_dns.results | map(attribute='json') | map(attribute='result') | map('length') | list }}"
+          - "CF70_ACCESS_APPS={{ cf70_access.json.result | length }} (policies not audited)"
+          - "CF70_PVE={{ pve.ipv4 }} cloudflared.service={{ cf70_pve_connector.stdout | default('not confirmed', true) }}"
+          - "CF70_RUNNER_LEGACY_SERVICE={{ cf70_runner_connector.stdout | default('not present', true) }}"
+          - "CF70_NO_MUTATION=true"

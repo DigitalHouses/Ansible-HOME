@@ -1,0 +1,89 @@
+---
+# Task 00 compatibility migration: rename the existing 15 template in-place.
+# Never create a second Cloudflare template, discard history or touch CF itself.
+- name: Read existing Semaphore template identities for Cloudflare migration
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_before_templates
+  changed_when: false
+  no_log: true
+
+- name: Identify legacy Cloudflare template and new catalog entry
+  ansible.builtin.set_fact:
+    cf70_before_old: >-
+      {{ cf70_before_templates.json | selectattr('name', 'equalto', '15-Cloudflare') | list }}
+    cf70_before_new: >-
+      {{ cf70_before_templates.json | selectattr('name', 'equalto', '70-Cloudflare') | list }}
+    cf70_catalog_target: >-
+      {{ catalog.tasks | selectattr('name', 'equalto', '70-Cloudflare') | first }}
+  no_log: true
+
+- name: Reject duplicate or incompatible Cloudflare template migration
+  ansible.builtin.assert:
+    that:
+      - cf70_before_old | length <= 1
+      - cf70_before_new | length <= 1
+      - (cf70_before_old | length) + (cf70_before_new | length) == 1
+      - cf70_before_old | length == 0 or cf70_before_old[0].app == 'ansible'
+      - cf70_before_old | length == 0 or cf70_before_old[0].playbook == 'playbooks/cloudflare-site.yml'
+      - cf70_before_new | length == 0 or cf70_before_new[0].playbook == cf70_catalog_target.playbook
+    fail_msg: HOME_CF70_TEMPLATE_OWNERSHIP_CONFLICT
+
+- name: Rename owned Cloudflare template without replacing its ID or inventory
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates/{{ cf70_before_old[0].id }}"
+    method: PUT
+    body_format: json
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    body:
+      id: "{{ cf70_before_old[0].id }}"
+      project_id: "{{ site_projects[0].id }}"
+      name: "{{ cf70_catalog_target.name }}"
+      app: "{{ cf70_before_old[0].app }}"
+      description: "{{ cf70_catalog_target.description }}"
+      playbook: "{{ cf70_catalog_target.playbook }}"
+      arguments: "{{ cf70_before_old[0].arguments }}"
+      inventory_id: "{{ cf70_before_old[0].inventory_id }}"
+      repository_id: "{{ cf70_before_old[0].repository_id }}"
+      environment_id: "{{ cf70_before_old[0].environment_id }}"
+      environment_ids: "{{ cf70_before_old[0].environment_ids | default([cf70_before_old[0].environment_id]) }}"
+      survey_vars: "{{ cf70_catalog_target.survey_vars | default([]) }}"
+    use_proxy: false
+    status_code: [200, 204]
+  when: cf70_before_old | length == 1
+  changed_when: true
+  no_log: true
+
+- name: Confirm Cloudflare template kept exactly the original ID
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_after_templates
+  changed_when: false
+  no_log: true
+
+- name: Require one canonical Cloudflare template with preserved identity
+  ansible.builtin.assert:
+    that:
+      - cf70_after_new | length == 1
+      - cf70_after_new[0].id == cf70_original_id
+      - cf70_after_new[0].playbook == cf70_catalog_target.playbook
+      - cf70_after_new[0].inventory_id == cf70_original_inventory_id
+      - cf70_after_new[0].environment_id == cf70_original_environment_id
+      - cf70_after_templates.json | selectattr('name', 'equalto', '15-Cloudflare') | list | length == 0
+    fail_msg: HOME_CF70_IN_PLACE_MIGRATION_FAILED
+  vars:
+    cf70_after_new: >-
+      {{ cf70_after_templates.json | selectattr('name', 'equalto', '70-Cloudflare') | list }}
+    cf70_source: "{{ (cf70_before_old if cf70_before_old | length > 0 else cf70_before_new) | first }}"
+    cf70_original_id: "{{ cf70_source.id }}"
+    cf70_original_inventory_id: "{{ cf70_source.inventory_id }}"
+    cf70_original_environment_id: "{{ cf70_source.environment_id }}"
