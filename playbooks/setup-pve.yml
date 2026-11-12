@@ -1,0 +1,367 @@
+---
+# Task 10 configures only Proxmox. Cloudflare belongs to task 15.
+# It never changes existing VM/LXC, pools, or disks.
+# Local inventory is supplied by Semaphore. PVE connection is added dynamically
+# from the public bootstrap identity; SSH trust is pinned during fresh bootstrap.
+- name: 10 - Resolve the trusted Proxmox host
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
+    setup_mode: "{{ DH_PVE_MODE | default('audit', true) }}"
+    repo_mode: "{{ DH_PVE_REPO_MODE | default('keep', true) }}"
+    upgrade_mode: "{{ DH_PVE_UPGRADE | default('no', true) }}"
+    ip_action: "{{ DH_PVE_NETWORK_ACTION | default('keep', true) }}"
+    new_ipv4: "{{ DH_PVE_NEW_IP | default('', true) }}"
+    quantum_action: "{{ DH_PVE_QUANTUM | default('install', true) }}"
+    quantum_update: "{{ DH_PVE_QUANTUM_UPDATE | default('no', true) }}"
+    ups_mode: "{{ DH_PVE_UPS_MODE | default('none', true) }}"
+    ups_driver: "{{ DH_PVE_UPS_DRIVER | default('auto', true) }}"
+    ups_host: "{{ DH_PVE_UPS_IP | default('', true) }}"
+    # Optional Variable Group overrides for uncommon SNMP hardware.
+    ups_snmp_version: "{{ DH_PVE_SNMP_VERSION | default('v3' if ups_mode == 'snmp_v3' else 'v2c', true) }}"
+    ups_snmp_mib: "{{ DH_PVE_SNMP_MIB | default('auto', true) }}"
+    ups_snmp_auth_protocol: "{{ DH_PVE_SNMP_AUTH_PROTOCOL | default('SHA', true) }}"
+    ups_snmp_priv_protocol: "{{ DH_PVE_SNMP_PRIV_PROTOCOL | default('AES', true) }}"
+    # SNMP credentials are saved by task 05 in Semaphore's native Variable Group.
+    ups_snmp_user: "{{ DH_PVE_SNMP_USERNAME | default('', true) }}"
+    ups_community: "{{ DH_PVE_SNMP_COMMUNITY | default('', true) }}"
+    ups_auth_pass: "{{ DH_PVE_SNMP_AUTH_PASSWORD | default('', true) }}"
+    ups_priv_pass: "{{ DH_PVE_SNMP_PRIV_PASSWORD | default('', true) }}"
+    pve_root_password: "{{ DH_PVE_ROOT_PASSWORD | default('', true) }}"
+  tasks:
+    - name: Validate host setup request
+      ansible.builtin.assert:
+        that:
+          - setup_mode in ['audit', 'apply']
+          - repo_mode in ['keep', 'nosub']
+          - upgrade_mode in ['no', 'yes']
+          - ip_action in ['keep', 'migrate']
+          - quantum_action in ['install', 'skip']
+          - quantum_update in ['no', 'yes']
+          - ip_action != 'migrate' or setup_mode == 'apply'
+          - ip_action != 'migrate' or new_ipv4 is match('^([0-9]{1,3}\\.){3}[0-9]{1,3}$')
+          - ups_mode in ['none', 'usb', 'snmp_v2c', 'snmp_v3']
+          - ups_driver in ['auto', 'usbhid-ups', 'nutdrv_qx', 'blazer_usb', 'bcmxcp_usb', 'tripplite_usb', 'snmp-ups']
+          - ups_mode != 'usb' or ups_driver != 'snmp-ups'
+          - ups_mode not in ['snmp_v2c', 'snmp_v3'] or ups_driver in ['auto', 'snmp-ups']
+          - ups_snmp_mib in ['auto', 'ietf', 'apcc', 'cyberpower', 'eaton_pw_nm2', 'netvision', 'tripplite']
+          - ups_snmp_version in ['v1', 'v2c', 'v3']
+          - ups_snmp_auth_protocol in ['SHA', 'SHA256', 'SHA384', 'SHA512']
+          - ups_snmp_priv_protocol in ['AES', 'AES192', 'AES256']
+          - pve.ipv4 is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+          - pve.node is match('^[a-zA-Z0-9][a-zA-Z0-9-]*$')
+          - ups_mode not in ['snmp_v2c', 'snmp_v3'] or ups_host is match('^[0-9]+\\.[0-9]+\\.[0-9]+\\.[0-9]+$')
+          - ups_mode != 'snmp_v3' or ups_snmp_version == 'v3'
+          - ups_mode != 'snmp_v2c' or ups_snmp_version in ['v1', 'v2c']
+        fail_msg: Invalid task 10 configuration
+    - name: Require an identified site and existing task 05 GitHub credential
+      ansible.builtin.assert:
+        that:
+          - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - github_token | length > 0
+        fail_msg: >-
+          Task 10 requires the canonical private site manifest and
+          GitHub credential from task 05
+      no_log: true
+
+    - name: Read the canonical site manifest from its private repository
+      ansible.builtin.uri:
+        url: >-
+          https://api.github.com/repos/DigitalHouses/site-{{ site_id }}/contents/inventories/{{ site_id }}/site.yml?ref=main
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: site_manifest_response
+      changed_when: false
+      no_log: true
+
+    - name: Decode the site-owned identity
+      ansible.builtin.set_fact:
+        canonical_site: "{{ site_manifest_response.json.content | b64decode | from_yaml }}"
+      no_log: true
+
+    - name: Require the site owner to match the provisioned site identity
+      ansible.builtin.assert:
+        that:
+          - canonical_site is mapping
+          - canonical_site.site is mapping
+          - canonical_site.site.id == site_id
+          - canonical_site.site.owner_slug is match('^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
+          - ('pve-' ~ canonical_site.site.owner_slug) | length <= 63
+        fail_msg: Invalid or mismatched site.id/owner_slug in private site repository
+
+    - name: Derive PVE naming policy from the canonical site owner
+      ansible.builtin.set_fact:
+        expected_pve_hostname: "{{ 'pve-' ~ canonical_site.site.owner_slug }}"
+        expected_pve_fqdn: "{{ 'pve-' ~ canonical_site.site.owner_slug ~ '.home.arpa' }}"
+
+    - name: Install standard password SSH transport for initial PVE enrollment
+      ansible.builtin.apt:
+        name: sshpass
+        state: present
+        update_cache: false
+      become: true
+      when: pve_root_password | length > 0
+      no_log: true
+
+    - name: Create the local SSH configuration directory on Runner
+      ansible.builtin.file:
+        path: /var/lib/semaphore/.ssh
+        state: directory
+        owner: semaphore
+        group: semaphore
+        mode: '0700'
+
+    - name: Generate the site-local SSH key only if missing
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh-keygen
+          - -q
+          - -t
+          - ed25519
+          - -N
+          - ''
+          - -f
+          - /var/lib/semaphore/.ssh/id_ed25519
+        creates: /var/lib/semaphore/.ssh/id_ed25519
+      no_log: true
+
+    - name: Ensure the local pinned host key file exists
+      ansible.builtin.copy:
+        dest: /var/lib/semaphore/.ssh/known_hosts
+        content: ''
+        force: false
+        owner: semaphore
+        group: semaphore
+        mode: '0600'
+
+    - name: Verify PVE HTTPS identity using the CA seeded by bootstrap
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/curl
+          - --silent
+          - --show-error
+          - --noproxy
+          - '*'
+          - --cacert
+          - "{{ pve.ca_file }}"
+          - --connect-timeout
+          - '5'
+          - --max-time
+          - '15'
+          - --output
+          - /dev/null
+          - --write-out
+          - '%{http_code}'
+          - "https://{{ pve.ipv4 }}:8006/api2/json/version"
+      register: pve_tls_check
+      changed_when: false
+      failed_when: pve_tls_check.rc != 0 or pve_tls_check.stdout not in ['200', '401']
+
+    - name: Read Runner IPv4 address for SSH source restriction
+      ansible.builtin.command: /usr/sbin/ip -4 -o addr show dev eth0
+      register: runner_address
+      changed_when: false
+
+    - name: Resolve Runner address without hardcoding the site subnet
+      ansible.builtin.set_fact:
+        runner_ipv4: >-
+          {{ (runner_address.stdout | regex_findall('inet ([0-9.]+)/')) | first }}
+
+    - name: Require Runner and PVE to share the expected management subnet
+      ansible.builtin.assert:
+        that:
+          - runner_ipv4 != pve.ipv4
+          - runner_ipv4.split('.')[:3] == pve.ipv4.split('.')[:3]
+        fail_msg: "Unexpected Runner source IP; refusing to grant root SSH from another network"
+
+    - name: Check the bootstrap-enrolled SSH identity
+      ansible.builtin.stat:
+        path: /var/lib/semaphore/.ssh/id_ed25519
+      register: ssh_identity
+    - name: Check the pinned PVE SSH host key
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh-keygen
+          - -F
+          - "{{ pve.ipv4 }}"
+          - -f
+          - /var/lib/semaphore/.ssh/known_hosts
+      register: ssh_host_check
+      changed_when: false
+      failed_when: false
+    - name: Pin the first-seen SSH identity when the legacy Runner has none
+      when: ssh_host_check.rc != 0
+      block:
+        - name: Require task 05 PVE root password for first SSH enrollment
+          ansible.builtin.assert:
+            that: pve_root_password | length > 0
+            fail_msg: "Missing PVE root credential from task 05; cannot enroll existing Runner"
+          no_log: true
+
+        - name: Discover PVE SSH public key over the verified LAN address
+          ansible.builtin.command:
+            argv:
+              - /usr/bin/ssh-keyscan
+              - -T
+              - '5'
+              - -t
+              - ed25519
+              - "{{ pve.ipv4 }}"
+          register: first_ssh_key
+          changed_when: false
+          no_log: true
+
+        - name: Require exactly one initial ED25519 public host key
+          ansible.builtin.assert:
+            that: >-
+              (first_ssh_key.stdout_lines |
+               select('match', '^' ~ (pve.ipv4 | regex_escape) ~ ' ssh-ed25519 ') |
+               list | length) == 1
+            fail_msg: "Cannot pin an unambiguous PVE SSH host key"
+          no_log: true
+
+        - name: Record the first-use PVE host key for strict subsequent checking
+          ansible.builtin.known_hosts:
+            name: "{{ pve.ipv4 }}"
+            key: >-
+              {{ (first_ssh_key.stdout_lines |
+                  select('match', '^' ~ (pve.ipv4 | regex_escape) ~ ' ssh-ed25519 ') |
+                  first) }}
+            path: /var/lib/semaphore/.ssh/known_hosts
+            state: present
+
+    - name: Require a valid local SSH identity and pinned PVE key
+      ansible.builtin.assert:
+        that: ssh_identity.stat.isreg | default(false)
+        fail_msg: "Runner has no SSH private key after initial enrollment"
+    - name: Add the exact PVE to the in-memory inventory
+      ansible.builtin.add_host:
+        name: managed_pve
+        groups: managed_pve_hosts
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_password: "{{ pve_root_password if pve_root_password | length > 0 else omit }}"
+        ansible_ssh_common_args: >-
+          -o StrictHostKeyChecking=yes -o ConnectTimeout=10
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        ansible_python_interpreter: /usr/bin/python3
+        expected_node: "{{ pve.node }}"
+        expected_pve_hostname: "{{ expected_pve_hostname }}"
+        expected_pve_fqdn: "{{ expected_pve_fqdn }}"
+        expected_runner_ipv4: "{{ runner_ipv4 }}"
+        requested_mode: "{{ setup_mode }}"
+        requested_repo_mode: "{{ repo_mode }}"
+        requested_upgrade: "{{ upgrade_mode }}"
+        requested_ip_action: "{{ ip_action }}"
+        requested_new_ipv4: "{{ new_ipv4 }}"
+        requested_quantum_action: "{{ quantum_action }}"
+        requested_cf_update: "{{ cf_update }}"
+        requested_quantum_update: "{{ quantum_update }}"
+        original_pve_ipv4: "{{ pve.ipv4 }}"
+        recorded_pve: "{{ pve }}"
+        requested_ups_mode: "{{ ups_mode }}"
+        requested_ups_driver: "{{ ups_driver }}"
+        requested_snmp_mib: "{{ ups_snmp_mib }}"
+        requested_ups_host: "{{ ups_host }}"
+        requested_snmp_version: "{{ ups_snmp_version }}"
+        requested_snmp_user: "{{ ups_snmp_user }}"
+        requested_snmp_auth_protocol: "{{ ups_snmp_auth_protocol }}"
+        requested_snmp_priv_protocol: "{{ ups_snmp_priv_protocol }}"
+        requested_ups_community: "{{ ups_community }}"
+        requested_ups_auth_pass: "{{ ups_auth_pass }}"
+        requested_ups_priv_pass: "{{ ups_priv_pass }}"
+      no_log: true
+
+- name: 10 - Audit or configure the Proxmox host
+  hosts: managed_pve_hosts
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Read actual host identity without discovering storage mount points
+      ansible.builtin.command: hostname -s
+      changed_when: false
+      register: actual_node
+    - name: Read actual Proxmox FQDN without changing its node identity
+      ansible.builtin.command: hostname -f
+      changed_when: false
+      register: actual_fqdn
+    - name: Read effective SSH identity
+      ansible.builtin.command: id -u
+      changed_when: false
+      register: effective_uid
+    - name: Require the expected Proxmox node and root connection
+      ansible.builtin.assert:
+        that:
+          - actual_node.stdout == expected_node
+          - effective_uid.stdout == '0'
+        fail_msg: Connected host identity differs from the bootstrap PVE node
+    - name: Report canonical PVE name and warn about legacy installation names
+      ansible.builtin.debug:
+        msg:
+          - "PVE_EXPECTED_FQDN={{ expected_pve_fqdn }}"
+          - "PVE_ACTUAL_FQDN={{ actual_fqdn.stdout }}"
+          - >-
+            PVE_NAME={{ 'PASS' if actual_node.stdout == expected_pve_hostname
+            and actual_fqdn.stdout == expected_pve_fqdn else
+            'WARN_LEGACY_NAME (existing PVE node is not renamed)' }}
+          - "BONJOUR_NAME={{ expected_pve_hostname }}.local"
+    - name: Enroll the Runner public key using native Ansible modules
+      ansible.builtin.include_tasks: ../tasks/pve-ssh-enrollment.yml
+      when: requested_mode == 'apply'
+
+    - name: Read PVE version without modifying the host
+      ansible.builtin.command: /usr/bin/pveversion
+      changed_when: false
+      register: pve_version
+    - name: Read the current vmbr0 address
+      ansible.builtin.command: /usr/sbin/ip -4 -o addr show dev vmbr0
+      changed_when: false
+      register: pve_network
+    - name: Report the host preflight
+      ansible.builtin.debug:
+        msg:
+          - "PVE_NODE={{ actual_node.stdout }}"
+          - "PVE_VERSION={{ pve_version.stdout }}"
+          - "NETWORK={{ pve_network.stdout }}"
+          - "MODE={{ requested_mode }}"
+          - "UPS_MODE={{ requested_ups_mode }}"
+    - name: Apply the selected PVE baseline
+      ansible.builtin.include_tasks: ../tasks/pve-baseline.yml
+      when: requested_mode == 'apply'
+    - name: Apply selected NUT configuration
+      ansible.builtin.include_tasks: ../tasks/pve-nut.yml
+      when:
+        - requested_mode == 'apply'
+        - requested_ups_mode != 'none'
+    - name: Migrate PVE management IP with timed rollback and runner verification
+      ansible.builtin.include_tasks: ../tasks/pve-network.yml
+      when:
+        - requested_mode == 'apply'
+        - requested_ip_action == 'migrate'
+        - requested_new_ipv4 != original_pve_ipv4
+    - name: Install FileBrowser Quantum with LAN firewall after any PVE IP migration
+      ansible.builtin.include_tasks: ../tasks/pve-quantum.yml
+      vars:
+        quantum_bind_ipv4: "{{ requested_new_ipv4 if requested_ip_action == 'migrate' else original_pve_ipv4 }}"
+      when:
+        - requested_mode == 'apply'
+        - requested_quantum_action == 'install'
+    - name: Report intentionally separate steps
+      ansible.builtin.debug:
+        msg:
+          - "PVE IP: {{ 'kept at ' + original_pve_ipv4 if requested_ip_action == 'keep' else 'requested ' + requested_new_ipv4 }}"
+          - "Quantum: {{ requested_quantum_action }}"
+          - "PBS storage and backup jobs: deferred until PBS deployment"
+          - "NUT automated shutdown: not armed by task 10"

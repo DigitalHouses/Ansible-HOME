@@ -1,0 +1,98 @@
+---
+- name: Choose the native NUT driver for the selected connection
+  ansible.builtin.set_fact:
+    nut_selected_driver: >-
+      {{ ('usbhid-ups' if requested_ups_mode == 'usb' else 'snmp-ups')
+         if requested_ups_driver == 'auto' else requested_ups_driver }}
+
+- name: Read existing NUT configuration without exposing credentials
+  ansible.builtin.slurp:
+    src: /etc/nut/ups.conf
+  register: nut_previous
+  no_log: true
+
+- name: Refuse to overwrite a manually configured UPS device
+  ansible.builtin.assert:
+    that:
+      - "'[ups]' not in (nut_previous.content | b64decode) or '# BEGIN ANSIBLE MANAGED BLOCK - DigitalHouses UPS' in (nut_previous.content | b64decode)"
+    fail_msg: "An unmanaged [ups] stanza exists; refusing to overwrite it"
+
+- name: Require network UPS credentials from task 05 before writing configuration
+  ansible.builtin.assert:
+    that:
+      - requested_ups_mode != 'snmp_v2c' or requested_ups_community | length > 0
+      - >-
+        requested_ups_mode != 'snmp_v3' or
+        (requested_snmp_user | length > 0 and
+         requested_ups_auth_pass | length >= 8 and
+         requested_ups_priv_pass | length >= 8)
+    fail_msg: "Missing SNMP credentials. Enter community (v2c) or username/Auth/Privacy (v3) in task 05 first."
+    quiet: true
+
+- name: Reject invalid SNMP credential characters
+  ansible.builtin.assert:
+    that:
+      - requested_snmp_user is not search('[\r\n\s]')
+      - requested_ups_community is not search('[\r\n]')
+      - requested_ups_auth_pass is not search('[\r\n]')
+      - requested_ups_priv_pass is not search('[\r\n]')
+    fail_msg: "SNMP credentials contain unsupported control characters"
+  no_log: true
+
+- name: Configure NUT standalone mode
+  ansible.builtin.lineinfile:
+    path: /etc/nut/nut.conf
+    regexp: '^\s*MODE\s*='
+    line: MODE=standalone
+  register: nut_mode_changed
+
+- name: Configure NUT driver and protocol
+  ansible.builtin.blockinfile:
+    path: /etc/nut/ups.conf
+    marker: '# {mark} ANSIBLE MANAGED BLOCK - DigitalHouses UPS'
+    block: |
+      [ups]
+          driver = {{ nut_selected_driver }}
+          port = {{ 'auto' if requested_ups_mode == 'usb' else requested_ups_host }}
+          desc = DigitalHouses UPS
+      {% if requested_ups_mode != 'usb' %}
+          mibs = {{ requested_snmp_mib }}
+          snmp_version = {{ requested_snmp_version }}
+      {% if requested_snmp_version in ['v1', 'v2c'] %}
+          community = {{ requested_ups_community }}
+      {% else %}
+          secLevel = authPriv
+          secName = {{ requested_snmp_user }}
+          authProtocol = {{ requested_snmp_auth_protocol }}
+          privProtocol = {{ requested_snmp_priv_protocol }}
+          authPassword = {{ requested_ups_auth_pass }}
+          privPassword = {{ requested_ups_priv_pass }}
+      {% endif %}
+      {% endif %}
+    owner: root
+    group: nut
+    mode: '0640'
+  register: nut_driver_changed
+  no_log: true
+
+- name: Start the NUT driver and local server
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: "{{ 'restarted' if nut_driver_changed.changed or nut_mode_changed.changed else 'started' }}"
+  loop: [nut-driver.target, nut-server.service]
+
+- name: Require successful NUT telemetry before declaring a working UPS
+  ansible.builtin.command:
+    argv: [upsc, 'ups@127.0.0.1', ups.status]
+  register: nut_status
+  changed_when: false
+  retries: 3
+  delay: 2
+  until: nut_status.rc == 0
+
+- name: Report UPS readiness without enabling automated shutdown
+  ansible.builtin.debug:
+    msg: >-
+      NUT=PASS, connection={{ requested_ups_mode }}, driver={{ nut_selected_driver }},
+      status={{ nut_status.stdout }}

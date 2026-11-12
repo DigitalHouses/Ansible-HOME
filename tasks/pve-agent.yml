@@ -1,0 +1,126 @@
+---
+- name: Inspect installed DigitalHouses PVE Agent build
+  ansible.builtin.stat:
+    path: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+  register: agent_build_stat
+
+- name: Read installed build identity
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+  register: agent_build
+  when: agent_build_stat.stat.exists
+
+- name: Parse installed agent version without assuming a release downgrade
+  ansible.builtin.set_fact:
+    agent_current_version: >-
+      {{ (agent_build.content | default('') | b64decode
+         | regex_findall('(?m)^version = ([0-9]+[.][0-9]+[.][0-9]+)$')
+         | first | default('0.0.0')) }}
+
+- name: Require a readable version in an existing canonical agent build
+  ansible.builtin.assert:
+    that:
+      - not agent_build_stat.stat.exists or agent_current_version != '0.0.0'
+    fail_msg: PVE_AGENT_EXISTING_BUILD_VERSION_UNREADABLE
+
+- name: Upgrade agent only when the pinned canonical release is newer
+  ansible.builtin.set_fact:
+    agent_upgrade_required: >-
+      {{ not agent_build_stat.stat.exists or
+         (requested_agent_update | default('no')) == 'yes' and
+         agent_current_version is version('0.5.75', '<') }}
+
+- name: Check for an existing local PVE Agent configuration
+  ansible.builtin.stat:
+    path: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
+  register: agent_config_stat
+
+- name: Create PVE Agent configuration directory when MQTT was supplied in task 05
+  ansible.builtin.file:
+    path: /etc/digitalhouses_pve_agent
+    state: directory
+    owner: root
+    group: root
+    mode: '0750'
+  when: requested_mqtt_host | length > 0
+
+- name: Seed PVE Agent configuration only on first installation
+  ansible.builtin.template:
+    src: "{{ playbook_dir | dirname }}/templates/pve-agent.conf.j2"
+    dest: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
+    owner: root
+    group: root
+    mode: '0600'
+  when:
+    - requested_mqtt_host | length > 0
+    - not agent_config_stat.stat.exists
+  register: agent_mqtt_new_config
+  no_log: true
+
+- name: Reconcile only existing PVE Agent MQTT settings from task 05
+  ansible.builtin.lineinfile:
+    path: /etc/digitalhouses_pve_agent/digitalhouses_pve_agent.conf
+    regexp: "^{{ item.key }}[ \\t]*="
+    line: "{{ item.key }} = {{ item.value }}"
+    insertafter: '^\\[mqtt\\]$'
+  loop:
+    - {key: host, value: "{{ requested_mqtt_host }}"}
+    - {key: username, value: "{{ requested_mqtt_user }}"}
+    - {key: password, value: "{{ requested_mqtt_password }}"}
+  when:
+    - requested_mqtt_host | length > 0
+    - agent_config_stat.stat.exists
+  register: agent_mqtt_existing_config
+  no_log: true
+
+- name: Download pinned canonical release installer
+  ansible.builtin.get_url:
+    url: https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_pve_agent-v0.5.75/digitalhouses_pve_agent/install.sh
+    dest: /root/.digitalhouses-pve-agent-install.sh
+    checksum: sha256:619fa66e5080f4b47c7f7912630bfbb3a36538f3e13a588743990642b29bdc4c
+    owner: root
+    group: root
+    mode: '0700'
+  when:
+    - requested_mqtt_host | length > 0
+    - agent_upgrade_required
+
+- name: Install or update PVE Agent to the canonical release
+  ansible.builtin.command:
+    argv: [/usr/bin/bash, /root/.digitalhouses-pve-agent-install.sh]
+  environment:
+    DIGITALHOUSES_SOURCE_REF: digitalhouses_pve_agent-v0.5.75
+    DIGITALHOUSES_INSTALL_MODE: production
+  when:
+    - requested_mqtt_host | length > 0
+    - agent_upgrade_required
+  no_log: true
+  changed_when: true
+
+- name: Verify canonical upgraded PVE Agent BUILD_INFO
+  ansible.builtin.slurp:
+    src: /opt/digitalhouses/digitalhouses_pve_agent/BUILD_INFO
+  register: agent_upgrade_build
+  when: agent_upgrade_required and requested_mqtt_host | length > 0
+
+- name: Require pinned release after install or upgrade
+  ansible.builtin.assert:
+    that:
+      - "'version = 0.5.75' in (agent_upgrade_build.content | b64decode)"
+      - "'source = digitalhouses_pve_agent-v0.5.75' in (agent_upgrade_build.content | b64decode)"
+    fail_msg: PVE_AGENT_RELEASE_MISMATCH_AFTER_UPDATE
+  when: agent_upgrade_required and requested_mqtt_host | length > 0
+
+- name: Confirm agent is enabled and started
+  ansible.builtin.systemd_service:
+    name: digitalhouses_pve_agent.service
+    enabled: true
+    state: "{{ 'restarted' if (agent_mqtt_new_config.changed | default(false)) or (agent_mqtt_existing_config.changed | default(false)) else 'started' }}"
+  when: requested_mqtt_host | length > 0
+
+- name: Report agent readiness
+  ansible.builtin.debug:
+    msg: >-
+      {{ 'PVE_AGENT=INSTALLED (MQTT connection may await broker)'
+         if requested_mqtt_host | length else
+         'PVE_AGENT=PENDING (enter MQTT broker in task 05)' }}

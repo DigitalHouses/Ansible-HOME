@@ -1,0 +1,5 @@
+# Переносимые настройки Codex для центрального DEV и site runner.
+# Доступ к Semaphore API настраивается локально (не через Git):
+# на DEV — защищенный curl config; исторический MCP на runner — локально.
+approval_policy = "on-request"
+sandbox_mode = "workspace-write"
