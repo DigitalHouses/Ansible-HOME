@@ -21,6 +21,34 @@
   changed_when: false
   no_log: true
 
+- name: Find the existing wildcard Access application
+  ansible.builtin.set_fact:
+    cf70_admin_access_wildcards: >-
+      {{ cf70_access.json.result
+         | selectattr('type', 'equalto', 'self_hosted')
+         | selectattr('domain', 'defined')
+         | selectattr('domain', 'equalto', '*.' ~ cf70_zone_name) | list }}
+
+- name: Read existing wildcard Access policies if unambiguous
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/access/apps/{{ cf70_admin_access_wildcards[0].id }}/policies?per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_admin_access_policies
+  changed_when: false
+  when: cf70_admin_access_wildcards | length == 1
+  no_log: true
+
+- name: Summarize existing wildcard Access restrictions
+  ansible.builtin.debug:
+    msg:
+      - "CF70_ADMIN_ACCESS_WILDCARD_COUNT={{ cf70_admin_access_wildcards | length }}"
+      - "CF70_ADMIN_ACCESS_POLICY_DECISIONS={{ cf70_admin_access_policies.json.result | map(attribute='decision') | list }}"
+      - "CF70_ADMIN_ACCESS_EMAIL_RULES={{ cf70_admin_access_policies.json.result | map(attribute='include') | flatten | selectattr('email','defined') | list | length }}"
+      - "CF70_ADMIN_ACCESS_EVERYONE_RULES={{ cf70_admin_access_policies.json.result | map(attribute='include') | flatten | selectattr('everyone','defined') | list | length }}"
+  when: cf70_admin_access_wildcards | length == 1
+
 - name: Report whether admin routes, DNS and Access applications exist
   ansible.builtin.debug:
     msg:
