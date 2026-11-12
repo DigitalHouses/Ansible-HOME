@@ -5,6 +5,8 @@
   hosts: runner
   connection: local
   gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
   vars:
     pbs34_action: "{{ DH_PBS_CORE_ACTION | default('audit', true) }}"
     pbs34_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
@@ -72,6 +74,60 @@
           - pbs34_pin.stat.mode == '0600'
         fail_msg: PBS34_MEDIA_PIN_UNAVAILABLE
 
+    - name: Read existing PVE backup jobs without modifying them
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=7
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/pvesh
+          - get
+          - /cluster/backup
+          - --output-format
+          - json
+      register: pbs34_pve_jobs
+      changed_when: false
+      failed_when: false
+
+    - name: Read configured PVE storage references without modifying them
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=7
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/pvesh
+          - get
+          - /storage
+          - --output-format
+          - json
+      register: pbs34_pve_storages
+      changed_when: false
+      failed_when: false
+
+    - name: Summarize existing PVE backup jobs and storage targets only
+      ansible.builtin.debug:
+        msg:
+          - "PBS34_PVE_BACKUP_JOBS={{ (pbs34_pve_jobs.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
+          - "PBS34_PVE_STORAGES={{ (pbs34_pve_storages.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_storages.rc == 0 else 'UNAVAILABLE' }}"
+
     - name: Register the existing media guest without changing it
       ansible.builtin.add_host:
         name: pbs34_media_guest
@@ -117,6 +173,13 @@
       register: pbs34_proxy
       changed_when: false
       failed_when: pbs34_proxy.stdout | trim != 'active'
+
+    - name: Check whether the intended PBS ZFS dataset exists without creating it
+      ansible.builtin.command:
+        argv: [zfs, list, -H, -o, name,mountpoint, "{{ pbs34_media.storage.pool_name }}/{{ pbs34_store }}"]
+      register: pbs34_zfs_source
+      changed_when: false
+      failed_when: false
 
     - name: Read all existing datastore definitions
       ansible.builtin.command:
@@ -209,6 +272,7 @@
           - "PBS34_VERSIONS={{ pbs34_versions.stdout_lines | first }}"
           - "PBS34_PROXY={{ pbs34_proxy.stdout | trim }}"
           - "PBS34_DATASTORES={{ pbs34_stores | map(attribute='name') | list }}"
+          - "PBS34_ZFS_SOURCE_PRESENT={{ pbs34_zfs_source.rc == 0 }} DATASET={{ pbs34_zfs_source.stdout | trim if pbs34_zfs_source.rc == 0 else 'NOT_FOUND' }}"
           - "PBS34_SOURCE={{ pbs34_store }} REGISTERED={{ pbs34_store_matches | length == 1 }}"
           - "PBS34_SOURCE_PATH={{ (pbs34_store_details.stdout | from_json).path if pbs34_store_matches | length == 1 else 'NOT_REGISTERED' }}"
           - "PBS34_CORE_SYNC_READY={{ pbs34_store_matches | length == 1 }} (no registered datastore means no namespaces or backup groups available)"
