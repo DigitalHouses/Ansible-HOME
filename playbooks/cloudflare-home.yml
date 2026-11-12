@@ -172,6 +172,84 @@
       changed_when: false
       failed_when: false
 
+    - name: Inspect HOME PVE cloudflared startup without printing credentials
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/systemctl
+          - show
+          - --property=ExecStart
+          - --value
+          - cloudflared.service
+      register: cf70_pve_exec
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Inspect legacy Runner cloudflared startup without printing credentials
+      ansible.builtin.command:
+        argv: [/usr/bin/systemctl, show, --property=ExecStart, --value, digitalhouses-site-cloudflared.service]
+      register: cf70_runner_exec
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Read HOME PVE tunnel registration logs without disclosing their content
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/journalctl
+          - -u
+          - cloudflared.service
+          - --since
+          - '24 hours ago'
+          - --no-pager
+          - -o
+          - cat
+      register: cf70_pve_logs
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Read legacy Runner tunnel registration logs without disclosing content
+      ansible.builtin.command:
+        argv: [/usr/bin/journalctl, -u, digitalhouses-site-cloudflared.service, --since, '24 hours ago', --no-pager, -o, cat]
+      register: cf70_runner_logs
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Summarize service connection evidence only
+      ansible.builtin.debug:
+        msg:
+          - "CF70_PVE_EXEC_RC={{ cf70_pve_exec.rc }} MODE={{ 'token' if '--token' in cf70_pve_exec.stdout else 'config' if '--config' in cf70_pve_exec.stdout else 'other' }}"
+          - "CF70_RUNNER_EXEC_RC={{ cf70_runner_exec.rc }} MODE={{ 'token' if '--token' in cf70_runner_exec.stdout else 'config' if '--config' in cf70_runner_exec.stdout else 'other' }}"
+          - "CF70_PVE_REGISTERED_24H={{ cf70_pve_logs.stdout | regex_findall('Registered tunnel connection') | length }} ERRORS={{ cf70_pve_logs.stdout | regex_findall('ERR ') | length }}"
+          - "CF70_RUNNER_REGISTERED_24H={{ cf70_runner_logs.stdout | regex_findall('Registered tunnel connection') | length }} ERRORS={{ cf70_runner_logs.stdout | regex_findall('ERR ') | length }}"
+          - "CF70_CONNECTION_FIELD_NAMES={{ (cf70_connections.json.result | first | default({})).keys() | list | sort }}"
+
     - name: Report the read-only HOME Cloudflare baseline
       ansible.builtin.debug:
         msg:
