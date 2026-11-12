@@ -177,13 +177,13 @@
 
     - name: Read actual ZFS pools before diagnosing missing PBS source
       ansible.builtin.command:
-        argv: [zpool, list, -H, -o, name,size,alloc,free,health]
+        argv: [zpool, list, -H, -o, 'name,size,alloc,free,health']
       register: pbs34_zpool_inventory
       changed_when: false
 
     - name: Read the imported media pool and child filesystems
       ansible.builtin.command:
-        argv: [zfs, list, -H, -r, -o, name,mountpoint,used,avail, "{{ pbs34_media.storage.pool_name }}"]
+        argv: [zfs, list, -H, -r, -o, 'name,mountpoint,used,avail', "{{ pbs34_media.storage.pool_name }}"]
       register: pbs34_zfs_inventory
       changed_when: false
       failed_when: false
