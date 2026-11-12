@@ -2,7 +2,7 @@
 
 1. Preserve the current project, Runner, inventory, templates, history,
    variable groups, and the old Ansible-3 repository record.
-2. Add Ansible-HOME main as a new Git repository record in that project.
+2. Add Ansible-HOMES main as a new Git repository record in that project.
 3. Verify that all currently used HOME playbooks and required files exist.
 4. Repoint ONLY owned HOME templates to the new repository, retaining IDs
    and surveys; verify task 00 and task 15/32 before running anything.

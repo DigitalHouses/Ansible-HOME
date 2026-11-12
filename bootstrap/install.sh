@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# DigitalHouses Ansible-HOME: fresh PVE bootstrap; no custom Python.
+# DigitalHouses Ansible-HOMES: fresh PVE bootstrap; no custom Python.
 set -Eeuo pipefail
 umask 077
 export LANG=C.UTF-8 LC_ALL=C.UTF-8
@@ -121,7 +121,7 @@ pct start "$CTID"
   echo 'BLOCKED: guest hostname differs' >&2; exit 2;
 }
 
-echo '=== 2/5 Ansible and Ansible-HOME sources ==='
+echo '=== 2/5 Ansible and Ansible-HOMES sources ==='
 pct exec "$CTID" -- apt-get update -o APT::Update::Error-Mode=any
 pct exec "$CTID" -- env DEBIAN_FRONTEND=noninteractive apt-get install -y \
   --no-install-recommends git python3 python3-venv python3-pip ca-certificates
@@ -129,7 +129,7 @@ pct exec "$CTID" -- python3 -m venv /opt/ansible/venv
 pct exec "$CTID" -- /opt/ansible/venv/bin/pip install \
   --disable-pip-version-check ansible-core==2.21.4
 pct exec "$CTID" -- git clone -q --depth 1 --single-branch \
-  --branch "$GIT_REF" https://github.com/DigitalHouses/Ansible-HOME.git /opt/ansible-home
+  --branch "$GIT_REF" https://github.com/DigitalHouses/Ansible-HOMES.git /opt/ansible-home
 CODE_RELEASE="$(pct exec "$CTID" -- git -C /opt/ansible-home rev-parse HEAD)"
 [[ $CODE_RELEASE =~ ^[0-9a-f]{40}$ ]] || { echo 'BLOCKED: invalid Git SHA' >&2; exit 2; }
 pct exec "$CTID" -- git -C /opt/ansible-home checkout -q --detach "$CODE_RELEASE"

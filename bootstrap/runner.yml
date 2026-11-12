@@ -1,6 +1,6 @@
 ---
 # Run inside a freshly created Debian 13 LXC, as root.
-- name: Install and initialize Ansible-HOME Runner with Semaphore
+- name: Install and initialize Ansible-HOMES Runner with Semaphore
   hosts: localhost
   connection: local
   gather_facts: false
@@ -10,7 +10,7 @@
     semaphore_deb_sha256: 7e26db3b09b8e9fe5d8bd5c3956f3640dfc748b290f0b0b282746ba2633bf03a
     semaphore_deb: "/root/semaphore_{{ semaphore_version }}_linux_amd64.deb"
     semaphore_api: http://127.0.0.1/api
-    code_repo_url: https://github.com/DigitalHouses/Ansible-HOME.git
+    code_repo_url: https://github.com/DigitalHouses/Ansible-HOMES.git
   tasks:
     - name: Validate new Runner identity
       ansible.builtin.assert:
@@ -373,7 +373,7 @@
       register: sem_git_key
       no_log: true
 
-    - name: Register public Ansible-HOME repository
+    - name: Register public Ansible-HOMES repository
       ansible.builtin.uri:
         url: "{{ semaphore_api }}/project/{{ sem_project.json.id }}/repositories"
         method: POST
@@ -381,7 +381,7 @@
         headers:
           Cookie: "{{ sem_cookie }}"
         body:
-          name: Ansible-HOME (public)
+          name: Ansible-HOMES (public)
           project_id: "{{ sem_project.json.id }}"
           git_url: "{{ code_repo_url }}"
           git_branch: "{{ code_branch | default('main') }}"
@@ -438,7 +438,7 @@
           name: 00-Обновить список задач
           project_id: "{{ sem_project.json.id }}"
           app: ansible
-          description: Synchronize catalog entries from the public Ansible-HOME repo
+          description: Synchronize catalog entries from the public Ansible-HOMES repo
           playbook: playbooks/update-task-catalog.yml
           arguments: '[]'
           type: ''

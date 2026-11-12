@@ -6,10 +6,10 @@ block creation; this bootstrap never deletes existing guests or disks.
 
 Run as PVE root:
 
-    bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/Ansible-HOME/main/bootstrap/install.sh)
+    bash <(curl -fsSL https://raw.githubusercontent.com/DigitalHouses/Ansible-HOMES/main/bootstrap/install.sh)
 
 Enter Site ID (e.g. serzhan-home, kraft-office) and confirm.
-Repository: DigitalHouses/Ansible-HOME, branch main.
+Repository: DigitalHouses/Ansible-HOMES, branch main.
 Catalog: catalog/tasks.yml. Runner checkout: /opt/ansible-home.
 
 DO NOT rerun bootstrap on an existing Semaphore installation.

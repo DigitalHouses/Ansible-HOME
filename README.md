@@ -1,4 +1,4 @@
-# DigitalHouses / Ansible-HOME
+# DigitalHouses / Ansible-HOMES
 
 Native Ansible + Semaphore for independently managed HOME/office sites.
 

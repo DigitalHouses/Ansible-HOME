@@ -3,7 +3,7 @@
 tasks:
   - name: 00-Обновить список задач
     playbook: playbooks/update-task-catalog.yml
-    description: Обновить каталог задач Semaphore из Ansible-HOME (без запуска остальных задач)
+    description: Обновить каталог задач Semaphore из Ansible-HOMES (без запуска остальных задач)
   - name: "05-Ввести и проверить credentials"
     playbook: playbooks/obtain-site-credentials.yml
     description: "Ввод и обновление паролей и токенов; проверка доступа к PVE, GitHub и Cloudflare"
