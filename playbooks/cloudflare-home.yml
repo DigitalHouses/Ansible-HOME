@@ -86,6 +86,28 @@
       ansible.builtin.set_fact:
         cf70_tunnel: "{{ cf70_tunnel_matches[0] }}"
 
+    - name: Read account Tunnel names to distinguish the existing PVE service
+      ansible.builtin.uri:
+        url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel?per_page=100"
+        headers: "{{ cf70_headers }}"
+        use_proxy: false
+        status_code: 200
+      register: cf70_all_tunnels
+      changed_when: false
+      no_log: true
+
+    - name: Select only tunnels that belong to this HOME identity
+      ansible.builtin.set_fact:
+        cf70_related_tunnels: "{{ cf70_all_tunnels.json.result | selectattr('name', 'search', site_id) | list }}"
+      no_log: true
+
+    - name: Report the HOME-owned Tunnel names without changing Cloudflare
+      ansible.builtin.debug:
+        msg:
+          - "CF70_TUNNEL_NAMES={{ cf70_related_tunnels | map(attribute='name') | list }}"
+          - "CF70_TUNNEL_IDS={{ cf70_related_tunnels | map(attribute='id') | list }}"
+          - "CF70_TUNNEL_STATUSES={{ cf70_related_tunnels | map(attribute='status') | list }}"
+
     - name: Read remotely managed ingress routes
       ansible.builtin.uri:
         url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
