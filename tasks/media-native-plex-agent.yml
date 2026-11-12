@@ -123,14 +123,14 @@
     media_plex_agent_install_needed: >-
       {{ not media_plex_agent_build_stat.stat.exists or
          (agents_update | default('no')) == 'yes' and
-         media_plex_agent_current_version is version('0.8.5', '<') }}
+         media_plex_agent_current_version is version('0.8.16', '<') }}
 
 - name: Download integrity-pinned vendor Plex Agent release installer
   ansible.builtin.get_url:
     url: >-
-      https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_plex_agent-v0.8.5/digitalhouses_plex_agent/install.sh
-    dest: /var/cache/digitalhouses/media/plex-agent-v0.8.5-install.sh
-    checksum: sha256:49176adc0a9ff1c3c40107283f13930f9d831956e892d8ac6112af8704921754
+      https://raw.githubusercontent.com/DigitalHouses/home-assistant-apps/digitalhouses_plex_agent-v0.8.16/digitalhouses_plex_agent/install.sh
+    dest: /var/cache/digitalhouses/media/plex-agent-v0.8.16-install.sh
+    checksum: sha256:7fd2013cacacd27e8cb3a332ab38c37f5eebf95f9e2dd780a2a5e6e42ac8deb7
     owner: root
     group: root
     mode: '0700'
@@ -138,9 +138,9 @@
 
 - name: Install only the upstream, checked Plex Agent product release
   ansible.builtin.command:
-    argv: [bash, /var/cache/digitalhouses/media/plex-agent-v0.8.5-install.sh]
+    argv: [bash, /var/cache/digitalhouses/media/plex-agent-v0.8.16-install.sh]
   environment:
-    DIGITALHOUSES_SOURCE_REF: digitalhouses_plex_agent-v0.8.5
+    DIGITALHOUSES_SOURCE_REF: digitalhouses_plex_agent-v0.8.16
   when: media_plex_agent_install_needed | bool
   changed_when: true
   no_log: true

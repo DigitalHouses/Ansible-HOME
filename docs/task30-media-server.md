@@ -129,7 +129,7 @@ RuTracker/Kinozal не включаются — необходима учётн�
 
 ## DigitalHouses Plex Agent (08.11.2026)
 
-**Историческая реализация перенесена:** Plex Agent v0.8.5, GPU helper и их приёмка теперь находятся только в [№60](task60-digitalhouses-agents.md). №30 отвечает за сам Plex, его библиотеки и настройки, но **не устанавливает агент**.
+**Историческая реализация перенесена:** Plex Agent (версия релиза управляется №60), GPU helper и их приёмка теперь находятся только в [№60](task60-digitalhouses-agents.md). №30 отвечает за сам Plex, его библиотеки и настройки, но **не устанавливает агент**.
 
 ## rclone v1.76.0 + официальный Web GUI (08.11.2026)
 
@@ -213,7 +213,7 @@ PBS datastores/backup jobs, PVE backup jobs, legacy NFS cleanup, изменен�
 - Native Filestash: штатный бинарный сервис, bcrypt admin-hash от единого пароля только при первой настройке, SMB passthrough к `127.0.0.1` с Go-шаблонами username/password, предварительно сохранённый 16-символьный secret_key, реальная проверка расшифрованного middleware через admin API и наличия SMB login form. Конфигурация существующего сервиса не перезаписывается; чужой backend и неправильный пароль блокируют выполнение.
 - Native Sambee: официальный Compose v2 + persistent `/opt/dh-sambee/data`, конфигурация имени владельца без пароля, firstboot `127.0.0.1:8000`, временный пароль берётся только из защищённых Docker logs и меняется официальным API, после подтверждения общего пароля открывается LAN. Для уже опубликованного экземпляра до `compose up` требуется успешная авторизация владельца; SQLite никогда не редактируется.
 - Native Arr wiring: через `ansible.builtin.uri` получаем действующие API keys из локального config.xml, проверяем ZFS root и категории qBittorrent, добавляем отсутствующие rootfolder и QBittorrent download-client providers в Radarr/Sonarr/Prowlarr, а также отсутствующие ссылки Prowlarr→Radarr/Sonarr. Для каждого нового provider используются штатные `/schema`, `/test`, `/POST` и повторный GET. Существующие подключения с теми же именами не перезаписываются. Indexers/торренты не добавляются автоматически.
-- DigitalHouses Plex Agent v0.8.5 и его GPU helper **перенесены в №60**,
+- DigitalHouses Plex Agent (версия релиза управляется №60) и его GPU helper **перенесены в №60**,
   их отсутствие не должно прерывать установку базового медиасервера №30.
 
 - Встроенная №81 оформлена в `tasks/media-accept-pve.yml`, `tasks/media-accept-guest.yml`, `tasks/media-accept-smb.yml` и вызывается в общем playbook после соответствующих стадий. PVE: VM identity, core/RAM/balloon, GPU/SATA PCI, running/QGA. Guest: healthy ZFS, declared datasets и ZFS mount, systemd, TCP endpoints, LAN portal, неавторизованный Arr/qBittorrent API, Jellyfin/Plex libraries, обязательная Plex scan policy и отдельное информационное состояние Plex account-token marker (не условие прохождения №81), реальные входы qBittorrent/Sambee/Filestash, все 4 SMB-шары под owner/admin. Для SMB используются только временные файлы `0600` в `/run`, удаляемые в `always` и скрытые через `no_log`. **Это подготовленные тесты, а не live-приёмка.**
