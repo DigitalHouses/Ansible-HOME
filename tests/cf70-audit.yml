@@ -21,7 +21,7 @@
           - cf70_entries[0].playbook == 'playbooks/cloudflare-home.yml'
           - cf70_entries[0].survey_vars | length == 1
           - cf70_entries[0].survey_vars[0].default_value == 'audit'
-          - cf70_entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','migrate','publish_semaphore','publish_webmin']
+          - cf70_entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','migrate','publish_semaphore','publish_webmin','publish_pbs_private']
 
     - name: Require read-only audit with no automatic installation or mutation
       ansible.builtin.assert:

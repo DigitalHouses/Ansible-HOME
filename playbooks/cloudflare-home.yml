@@ -20,7 +20,7 @@
     - name: Require safe read-only task 70 mode and site credentials
       ansible.builtin.assert:
         that:
-          - cf70_action in ['audit', 'migrate', 'publish_semaphore', 'publish_webmin']
+          - cf70_action in ['audit', 'migrate', 'publish_semaphore', 'publish_webmin', 'publish_pbs_private']
           - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - cf70_token | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -316,3 +316,7 @@
     - name: Manage only the requested Semaphore or Webmin route
       ansible.builtin.include_tasks: ../tasks/cf70-admin-actions.yml
       when: cf70_action in ['publish_semaphore', 'publish_webmin']
+
+    - name: Publish only the HOME PBS private host route through the existing PVE Tunnel
+      ansible.builtin.include_tasks: ../tasks/cf70-pbs-private.yml
+      when: cf70_action == 'publish_pbs_private'

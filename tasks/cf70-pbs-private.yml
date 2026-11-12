@@ -1,0 +1,168 @@
+---
+# HOME 70: one private PBS /32 route on the existing site Tunnel.
+# No public hostname, service install, connector restart, CORE edits or Access changes.
+- name: Require healthy existing PVE Tunnel for private PBS route
+  ansible.builtin.assert:
+    that:
+      - cf70_tunnel.status == 'healthy'
+      - cf70_pve_connector.stdout == 'active'
+      - cf70_runner_connector.stdout != 'active'
+      - cf70_connections.json.result | length == 1
+      - DH_GITHUB_PROVISION_TOKEN | default('') | length > 0
+    fail_msg: CF70_PBS_PRIVATE_EXISTING_TUNNEL_OR_MANIFEST_CREDENTIAL_MISSING
+  no_log: true
+
+- name: Read the canonical HOME media VM inventory
+  ansible.builtin.uri:
+    url: "https://api.github.com/repos/DigitalHouses/site-{{ site_id }}/contents/inventories/{{ site_id }}/media_vm.yml?ref=main"
+    headers:
+      Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+      Accept: application/vnd.github+json
+    use_proxy: false
+    status_code: 200
+  register: cf70_pbs_manifest
+  changed_when: false
+  no_log: true
+
+- name: Extract the PBS media guest and its exact IPv4
+  ansible.builtin.set_fact:
+    cf70_pbs_media: "{{ (cf70_pbs_manifest.json.content | b64decode | from_yaml).media_vm }}"
+  no_log: true
+
+- name: Refuse a media guest outside the site addressing standard
+  ansible.builtin.assert:
+    that:
+      - cf70_pbs_media.vmid | int == 2223
+      - cf70_pbs_media.network.ipv4 is match('^([0-9]{1,3}[.]){3}223/24$')
+      - cf70_pbs_media.network.ipv4.split('/')[0].split('.')[0:3] == pve.ipv4.split('.')[0:3]
+    fail_msg: CF70_PBS_PRIVATE_MEDIA_INVENTORY_CONFLICT
+
+- name: Derive exactly one private PBS host route
+  ansible.builtin.set_fact:
+    cf70_pbs_ip: "{{ cf70_pbs_media.network.ipv4.split('/')[0] }}"
+    cf70_pbs_cidr: "{{ cf70_pbs_media.network.ipv4.split('/')[0] }}/32"
+
+- name: Probe PBS HTTPS from the existing PVE connector host
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ssh
+      - -i
+      - /var/lib/semaphore/.ssh/id_ed25519
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      - -o
+      - ConnectTimeout=7
+      - "root@{{ pve.ipv4 }}"
+      - /usr/bin/curl
+      - --insecure
+      - --silent
+      - --show-error
+      - --noproxy
+      - '*'
+      - --max-time
+      - '10'
+      - --output
+      - /dev/null
+      - --write-out
+      - '%{http_code}'
+      - "https://{{ cf70_pbs_ip }}:8007/"
+  register: cf70_pbs_origin
+  changed_when: false
+
+- name: Require the PBS HTTPS origin to respond before any Cloudflare write
+  ansible.builtin.assert:
+    that:
+      - cf70_pbs_origin.rc == 0
+      - cf70_pbs_origin.stdout == '200'
+    fail_msg: CF70_PBS_PRIVATE_ORIGIN_UNAVAILABLE_FROM_PVE
+
+- name: Read existing private routes that cover the requested host
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/teamnet/routes?is_deleted=false&network_superset={{ cf70_pbs_cidr | urlencode }}&per_page=1000"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: [200, 403]
+  register: cf70_pbs_routes_before
+  changed_when: false
+  no_log: true
+
+- name: Require Cloudflare private network route read permission
+  ansible.builtin.assert:
+    that:
+      - cf70_pbs_routes_before.status == 200
+      - cf70_pbs_routes_before.json.success | bool
+      - cf70_pbs_routes_before.json.result | length < 1000
+    fail_msg: CF70_PBS_PRIVATE_ROUTES_API_UNAVAILABLE_OR_PAGINATED
+
+- name: Identify an existing exact route and foreign covering routes
+  ansible.builtin.set_fact:
+    cf70_pbs_existing: >-
+      {{ cf70_pbs_routes_before.json.result |
+         selectattr('network', 'equalto', cf70_pbs_cidr) | list }}
+    cf70_pbs_foreign_covering: >-
+      {{ cf70_pbs_routes_before.json.result |
+         rejectattr('tunnel_id', 'equalto', cf70_tunnel.id) | list }}
+
+- name: Reject conflicts instead of changing another Tunnel
+  ansible.builtin.assert:
+    that:
+      - cf70_pbs_existing | length <= 1
+      - cf70_pbs_foreign_covering | length == 0
+      - cf70_pbs_existing | length == 0 or cf70_pbs_existing[0].tunnel_id == cf70_tunnel.id
+    fail_msg: CF70_PBS_PRIVATE_ROUTE_CONFLICT
+
+- name: Create only the missing /32 route through the existing Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/teamnet/routes"
+    method: POST
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      network: "{{ cf70_pbs_cidr }}"
+      tunnel_id: "{{ cf70_tunnel.id }}"
+      comment: "{{ site_id }} PBS:8007 via HOME PVE"
+    use_proxy: false
+    status_code: [200, 201]
+  register: cf70_pbs_created
+  changed_when: true
+  when: cf70_pbs_existing | length == 0
+  no_log: true
+
+- name: Read the published route back through Cloudflare API
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/teamnet/routes?is_deleted=false&network_superset={{ cf70_pbs_cidr | urlencode }}&per_page=1000"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_pbs_routes_after
+  changed_when: false
+  no_log: true
+
+- name: Select the persisted exact private route
+  ansible.builtin.set_fact:
+    cf70_pbs_verified: >-
+      {{ cf70_pbs_routes_after.json.result |
+         selectattr('network', 'equalto', cf70_pbs_cidr) | list }}
+
+- name: Require one live /32 pointing to the original site Tunnel
+  ansible.builtin.assert:
+    that:
+      - cf70_pbs_routes_after.json.success | bool
+      - cf70_pbs_verified | length == 1
+      - cf70_pbs_verified[0].tunnel_id == cf70_tunnel.id
+      - cf70_pbs_verified[0].deleted_at is not defined or cf70_pbs_verified[0].deleted_at is none
+    fail_msg: CF70_PBS_PRIVATE_ROUTE_READBACK_FAILED
+
+- name: Report verified HOME PBS route without claiming CORE transport
+  ansible.builtin.debug:
+    msg:
+      - "CF70_PBS_PRIVATE_ROUTE={{ cf70_pbs_cidr }}"
+      - "CF70_PBS_PRIVATE_TUNNEL={{ site_id }} UUID={{ cf70_tunnel.id }}"
+      - "CF70_PBS_PRIVATE_ROUTE_ID={{ cf70_pbs_verified[0].id }}"
+      - "CF70_PBS_PRIVATE_ORIGIN=https://{{ cf70_pbs_ip }}:8007/"
+      - "CF70_PBS_PRIVATE_CLOUD_API=PASS"
+      - "CF70_PBS_PRIVATE_CORE_TRANSPORT=NOT_TESTED (Ansible-CORE task 40)"

@@ -1,0 +1,25 @@
+---
+- name: Verify task 70 PBS private route contract without API calls
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    route_tasks: "{{ lookup('ansible.builtin.file', root ~ '/tasks/cf70-pbs-private.yml') | from_yaml }}"
+  tasks:
+    - name: Parse the private route implementation without executing it
+      ansible.builtin.import_tasks: ../tasks/cf70-pbs-private.yml
+      when: false
+
+    - name: Require exactly one create-only Cloudflare route mutation
+      ansible.builtin.assert:
+        that:
+          - route_tasks | selectattr('name','equalto','Create only the missing /32 route through the existing Tunnel') | list | length == 1
+          - route_tasks | selectattr('name','equalto','Read the published route back through Cloudflare API') | list | length == 1
+          - route_tasks | to_json is not search('method.*DELETE')
+          - route_tasks | to_json is not search('method.*PUT')
+          - route_tasks | to_json is not search('method.*PATCH')
+          - route_tasks | to_json is search('teamnet/routes')
+          - route_tasks | to_json is not search('dns_records')
+          - route_tasks | to_json is not search('access/apps')
+          - route_tasks | to_json is search('CF70_PBS_PRIVATE_CORE_TRANSPORT=NOT_TESTED')

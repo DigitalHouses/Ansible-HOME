@@ -123,7 +123,7 @@ tasks:
           - {name: "snmp-ups — сетевой", value: snmp-ups}
   - name: "70-Cloudflare"
     playbook: playbooks/cloudflare-home.yml
-    description: "Единый Cloudflare Tunnel HOME: аудит, коннектор PVE и маршруты Semaphore/Webmin"
+    description: "Единый Cloudflare Tunnel HOME: публичные маршруты и private route PBS /32"
     survey_vars:
       - name: DH_CF70_ACTION
         title: "Cloudflare — действие"
@@ -136,6 +136,7 @@ tasks:
           - {name: "Перенести существующий коннектор на PVE", value: migrate}
           - {name: "Опубликовать Semaphore через существующий Tunnel", value: publish_semaphore}
           - {name: "Опубликовать Webmin через существующий Tunnel", value: publish_webmin}
+          - {name: "Опубликовать приватный PBS /32 через существующий Tunnel", value: publish_pbs_private}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"
