@@ -139,7 +139,7 @@
   environment:
     PBS_REPOSITORY: "{{ pbs34_core_repo }}"
     PBS_PASSWORD_FILE: "{{ pbs34_core_token_path }}"
-    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found[0] }}"
+    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found }}"
   register: pbs34_core_namespaces_raw
   changed_when: false
   no_log: true
@@ -150,7 +150,7 @@
   environment:
     PBS_REPOSITORY: "{{ pbs34_core_repo }}"
     PBS_PASSWORD_FILE: "{{ pbs34_core_token_path }}"
-    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found[0] }}"
+    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found }}"
   register: pbs34_core_groups_raw
   changed_when: false
   no_log: true
@@ -161,7 +161,7 @@
   environment:
     PBS_REPOSITORY: "{{ pbs34_core_repo }}"
     PBS_PASSWORD_FILE: "{{ pbs34_core_token_path }}"
-    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found[0] }}"
+    PBS_FINGERPRINT: "{{ pbs34_fingerprint_found }}"
   register: pbs34_core_snapshots_raw
   changed_when: false
   no_log: true
@@ -175,5 +175,5 @@
       - "PBS34_CORE_ROOT_SNAPSHOT_COUNT={{ (pbs34_core_snapshots_raw.stdout | from_json) | length }}"
       - "PBS34_CORE_TOKEN_ID={{ pbs34_core_token_id }}"
       - "PBS34_CORE_ACL=DatastoreReader,DatastoreAudit on {{ pbs34_core_acl_path }}"
-      - "PBS34_CORE_TLS_SHA256={{ pbs34_fingerprint_found[0] }}"
+      - "PBS34_CORE_TLS_SHA256={{ pbs34_fingerprint_found }}"
       - "PBS34_CORE_SECRET_ON_HOME_VM={{ pbs34_core_token_path }} (root-only; never logged)"

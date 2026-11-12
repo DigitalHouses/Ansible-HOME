@@ -177,24 +177,29 @@
       changed_when: false
       no_log: true
 
-    - name: Read current PBS TLS certificate fingerprint from source server
+    - name: Read source PBS proxy X509 certificate fingerprint directly
       ansible.builtin.command:
-        argv: [proxmox-backup-manager, cert, info]
+        argv:
+          - openssl
+          - x509
+          - -in
+          - /etc/proxmox-backup/proxy.pem
+          - -noout
+          - -fingerprint
+          - -sha256
       register: pbs34_cert_raw
       changed_when: false
 
     - name: Compare the exact SHA-256 certificate fingerprint from CORE
       ansible.builtin.set_fact:
-        pbs34_fingerprint_found: >-
-          {{ pbs34_cert_raw.stdout | lower |
-             regex_findall('(?m)^fingerprint \\(sha256\\):\\s*([0-9a-f]{2}(?::[0-9a-f]{2}){31})\\s*$') }}
+        pbs34_fingerprint_found: "{{ pbs34_cert_raw.stdout.split('=')[-1] | trim | lower }}"
         pbs34_fingerprint_expected: 69:b6:a4:47:18:b2:b9:87:f3:40:2b:16:96:04:73:e9:8b:e0:5e:53:5f:da:f2:11:ea:56:d2:ed:08:cb:54:db
 
     - name: Require exact TLS fingerprint match before provisioning CORE access
       ansible.builtin.assert:
         that:
-          - pbs34_fingerprint_found | length == 1
-          - pbs34_fingerprint_found[0] == pbs34_fingerprint_expected
+          - pbs34_fingerprint_found is match('^[0-9a-f]{2}(:[0-9a-f]{2}){31}$')
+          - pbs34_fingerprint_found == pbs34_fingerprint_expected
         fail_msg: PBS34_TLS_FINGERPRINT_MISMATCH
 
     - name: Summarize existing PBS principals and source datastore nonsecret metadata
@@ -210,7 +215,7 @@
           - "PBS34_USERS={{ (pbs34_users_raw.stdout | from_json) | map(attribute='userid') | list }}"
           - "PBS34_ROOT_TOKEN_IDS={{ (pbs34_tokens_raw.stdout | from_json) | map(attribute='tokenid') | list }}"
           - "PBS34_ACL_COUNT={{ (pbs34_acl_raw.stdout | from_json) | length }}"
-          - "PBS34_TLS_SHA256={{ pbs34_fingerprint_found[0] }}"
+          - "PBS34_TLS_SHA256={{ pbs34_fingerprint_found }}"
           - "PBS34_MODE={{ pbs34_action }}"
 
     - name: Prepare CORE read-only token only when expressly selected
