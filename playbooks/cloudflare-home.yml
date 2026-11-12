@@ -250,6 +250,71 @@
           - "CF70_RUNNER_REGISTERED_24H={{ cf70_runner_logs.stdout | regex_findall('Registered tunnel connection') | length }} ERRORS={{ cf70_runner_logs.stdout | regex_findall('ERR ') | length }}"
           - "CF70_CONNECTION_FIELD_NAMES={{ (cf70_connections.json.result | first | default({})).keys() | list | sort }}"
 
+    - name: Extract only tunnel identifiers from existing service tokens
+      ansible.builtin.set_fact:
+        cf70_pve_token: "{{ (cf70_pve_exec.stdout | regex_findall('--token[= ]+([A-Za-z0-9+/=]+)') | first) | default('') }}"
+        cf70_runner_token: "{{ (cf70_runner_exec.stdout | regex_findall('--token[= ]+([A-Za-z0-9+/=]+)') | first) | default('') }}"
+      no_log: true
+
+    - name: Decode Cloudflare Tunnel UUIDs without exposing service credentials
+      ansible.builtin.set_fact:
+        cf70_pve_token_tunnel: "{{ ((cf70_pve_token | b64decode | from_json).t | default('')) if cf70_pve_token | length > 0 else '' }}"
+        cf70_runner_token_tunnel: "{{ ((cf70_runner_token | b64decode | from_json).t | default('')) if cf70_runner_token | length > 0 else '' }}"
+      no_log: true
+
+    - name: Inspect recent startup lines on HOME PVE for connector identity
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/journalctl
+          - -u
+          - cloudflared.service
+          - -n
+          - '300'
+          - --no-pager
+          - -o
+          - cat
+      register: cf70_pve_startup
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Inspect recent startup lines on Runner for connector identity
+      ansible.builtin.command:
+        argv: [/usr/bin/journalctl, -u, digitalhouses-site-cloudflared.service, -n, '300', --no-pager, -o, cat]
+      register: cf70_runner_startup
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Compare Cloudflare connector instance IDs without leaking logs
+      ansible.builtin.set_fact:
+        cf70_pve_connector_ids: "{{ cf70_pve_startup.stdout | regex_findall('Generated Connector ID:\\s*([0-9a-f-]{36})') | unique | list }}"
+        cf70_runner_connector_ids: "{{ cf70_runner_startup.stdout | regex_findall('Generated Connector ID:\\s*([0-9a-f-]{36})') | unique | list }}"
+        cf70_live_connector_ids: "{{ cf70_connections.json.result | map(attribute='id') | list }}"
+      no_log: true
+
+    - name: Show safe connector ownership evidence
+      ansible.builtin.debug:
+        msg:
+          - "CF70_PVE_TOKEN_MATCH={{ cf70_pve_token_tunnel == cf70_tunnel.id }} PVE_TUNNEL_ID={{ cf70_pve_token_tunnel | default('unknown', true) }}"
+          - "CF70_RUNNER_TOKEN_MATCH={{ cf70_runner_token_tunnel == cf70_tunnel.id }} RUNNER_TUNNEL_ID={{ cf70_runner_token_tunnel | default('unknown', true) }}"
+          - "CF70_LIVE_CONNECTOR_IDS={{ cf70_live_connector_ids }}"
+          - "CF70_PVE_CONNECTOR_ID_MATCH={{ cf70_pve_connector_ids | intersect(cf70_live_connector_ids) | length > 0 }} PVE_LOG_IDS={{ cf70_pve_connector_ids }}"
+          - "CF70_RUNNER_CONNECTOR_ID_MATCH={{ cf70_runner_connector_ids | intersect(cf70_live_connector_ids) | length > 0 }} RUNNER_LOG_IDS={{ cf70_runner_connector_ids }}"
+          - "CF70_LIVE_START={{ cf70_connections.json.result | map(attribute='run_at') | list }} VERSIONS={{ cf70_connections.json.result | map(attribute='version') | list }}"
+
     - name: Report the read-only HOME Cloudflare baseline
       ansible.builtin.debug:
         msg:
