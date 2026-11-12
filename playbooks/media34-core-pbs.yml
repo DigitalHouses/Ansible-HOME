@@ -131,6 +131,10 @@
           {{ (pbs34_stores_raw.stdout | from_json) |
              selectattr('name','equalto',pbs34_store) | list }}
 
+    - name: Report existing PBS datastore inventory before deciding source
+      ansible.builtin.debug:
+        msg: "PBS34_DISCOVERED_DATASTORES={{ pbs34_stores }}"
+
     - name: Require exactly one existing HOME source datastore
       ansible.builtin.assert:
         that:
