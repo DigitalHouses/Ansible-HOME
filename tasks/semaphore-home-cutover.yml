@@ -1,0 +1,212 @@
+---
+# One-time in-place Semaphore HOME repository cutover.
+# Trigger: task 00 itself has been pointed to canonical Ansible-HOME main.
+# Never delete the old Git repository record, inventory, templates, or task history.
+- name: Read the existing HOME and legacy repository records
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/repositories"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: home_cutover_repositories
+  changed_when: false
+  no_log: true
+
+- name: Select canonical HOME repository and preserved source
+  ansible.builtin.set_fact:
+    home_cutover_new: >-
+      {{ home_cutover_repositories.json |
+         selectattr('git_url', 'equalto', 'https://github.com/DigitalHouses/Ansible-HOME.git') |
+         selectattr('git_branch', 'equalto', 'main') | list }}
+    home_cutover_old: >-
+      {{ home_cutover_repositories.json |
+         selectattr('git_url', 'equalto', 'https://github.com/DigitalHouses/Ansible-3.git') | list }}
+  no_log: true
+
+- name: Require exactly one HOME target and task 00 using it
+  ansible.builtin.assert:
+    that:
+      - home_cutover_new | length == 1
+      - bootstrap_templates[0].repository_id == home_cutover_new[0].id
+      - home_cutover_old | length <= 1
+    fail_msg: HOME_CUTOVER_TARGET_MUST_BE_AN_EXPLICIT_TASK_00_REPOSITORY_SELECTION
+
+- name: Refresh current templates after catalog reconciliation
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: home_cutover_templates
+  changed_when: false
+  no_log: true
+
+- name: Reject duplicate or foreign catalog templates before any repoint
+  ansible.builtin.assert:
+    that:
+      - matched | length <= 1
+      - matched | length == 0 or matched[0].app == 'ansible'
+      - matched | length == 0 or matched[0].playbook == item.playbook
+      - matched | length == 0 or matched[0].inventory_id == bootstrap_templates[0].inventory_id
+      - >-
+        matched | length == 0 or
+        matched[0].repository_id == home_cutover_new[0].id or
+        (home_cutover_old | length == 1 and
+         matched[0].repository_id == home_cutover_old[0].id)
+    fail_msg: HOME_CUTOVER_FOREIGN_OR_AMBIGUOUS_TEMPLATE
+  vars:
+    matched: "{{ home_cutover_templates.json | selectattr('name', 'equalto', item.name) | list }}"
+  loop: "{{ catalog.tasks }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Require the old repository to be preserved before migrating its templates
+  ansible.builtin.assert:
+    that: home_cutover_old | length == 1
+    fail_msg: HOME_CUTOVER_SOURCE_REPOSITORY_MISSING
+  when: >-
+    home_cutover_templates.json |
+    rejectattr('repository_id', 'equalto', home_cutover_new[0].id) |
+    selectattr('name', 'in', (catalog.tasks | map(attribute='name') | list)) |
+    list | length > 0
+
+- name: Repoint only existing owned templates, retaining their original IDs and settings
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates/{{ item.id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    body_format: json
+    body:
+      id: "{{ item.id }}"
+      project_id: "{{ item.project_id }}"
+      name: "{{ item.name }}"
+      app: "{{ item.app }}"
+      description: "{{ item.description }}"
+      playbook: "{{ item.playbook }}"
+      arguments: "{{ item.arguments }}"
+      inventory_id: "{{ item.inventory_id }}"
+      repository_id: "{{ home_cutover_new[0].id }}"
+      environment_id: "{{ item.environment_id }}"
+      environment_ids: "{{ item.environment_ids | default([item.environment_id]) }}"
+      survey_vars: "{{ item.survey_vars | default([]) }}"
+      type: "{{ item.type | default('') }}"
+      autorun: "{{ item.autorun | default(false) }}"
+      allow_override_args_in_task: "{{ item.allow_override_args_in_task | default(false) }}"
+    use_proxy: false
+    status_code: [200, 204]
+  loop: >-
+    {{ home_cutover_templates.json |
+       selectattr('name', 'in', (catalog.tasks | map(attribute='name') | list)) |
+       rejectattr('repository_id', 'equalto', home_cutover_new[0].id) | list }}
+  loop_control:
+    label: "{{ item.name }}"
+  changed_when: true
+  no_log: true
+
+- name: Inspect the existing Runner inventory without recreating it
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/inventory"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: home_cutover_inventories
+  changed_when: false
+  no_log: true
+
+- name: Select only the Runner inventory used by task 00
+  ansible.builtin.set_fact:
+    home_cutover_runner_inventory: >-
+      {{ home_cutover_inventories.json |
+         selectattr('id', 'equalto', bootstrap_templates[0].inventory_id) | list }}
+  no_log: true
+
+- name: Validate the existing Runner inventory and repository ownership
+  ansible.builtin.assert:
+    that:
+      - home_cutover_runner_inventory | length == 1
+      - home_cutover_runner_inventory[0].type == 'file'
+      - home_cutover_runner_inventory[0].inventory == 'inventory/bootstrap.yml'
+      - >-
+        home_cutover_runner_inventory[0].repository_id == home_cutover_new[0].id or
+        (home_cutover_old | length == 1 and
+         home_cutover_runner_inventory[0].repository_id == home_cutover_old[0].id)
+    fail_msg: HOME_CUTOVER_FOREIGN_INVENTORY_REFUSED
+
+- name: Repoint the same Runner inventory record without touching credentials or history
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/inventory/{{ home_cutover_runner_inventory[0].id }}"
+    method: PUT
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    body_format: json
+    body:
+      id: "{{ home_cutover_runner_inventory[0].id }}"
+      project_id: "{{ site_projects[0].id }}"
+      name: "{{ home_cutover_runner_inventory[0].name }}"
+      type: "{{ home_cutover_runner_inventory[0].type }}"
+      inventory: "{{ home_cutover_runner_inventory[0].inventory }}"
+      ssh_key_id: "{{ home_cutover_runner_inventory[0].ssh_key_id }}"
+      repository_id: "{{ home_cutover_new[0].id }}"
+    use_proxy: false
+    status_code: [200, 204]
+  when: home_cutover_runner_inventory[0].repository_id != home_cutover_new[0].id
+  changed_when: true
+  no_log: true
+
+- name: Verify all owned templates after cutover
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: home_cutover_verify_templates
+  changed_when: false
+  no_log: true
+
+- name: Require the new repository for every existing catalog template
+  ansible.builtin.assert:
+    that:
+      - matched | length == 1
+      - matched[0].repository_id == home_cutover_new[0].id
+      - matched[0].id == before[0].id
+    fail_msg: HOME_CUTOVER_TEMPLATE_REPOSITORY_OR_ID_MISMATCH
+  vars:
+    matched: "{{ home_cutover_verify_templates.json | selectattr('name', 'equalto', item.name) | list }}"
+    before: "{{ home_cutover_templates.json | selectattr('name', 'equalto', item.name) | list }}"
+  loop: "{{ catalog.tasks }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: Verify the Runner inventory after repoint
+  ansible.builtin.uri:
+    url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/inventory"
+    headers:
+      Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+    use_proxy: false
+    status_code: 200
+  register: home_cutover_verify_inventories
+  changed_when: false
+  no_log: true
+
+- name: Require the original Runner inventory ID with canonical repository
+  ansible.builtin.assert:
+    that:
+      - verified | length == 1
+      - verified[0].repository_id == home_cutover_new[0].id
+    fail_msg: HOME_CUTOVER_RUNNER_INVENTORY_NOT_SWITCHED
+  vars:
+    verified: >-
+      {{ home_cutover_verify_inventories.json |
+         selectattr('id', 'equalto', bootstrap_templates[0].inventory_id) | list }}
+
+- name: Report in-place HOME cutover
+  ansible.builtin.debug:
+    msg: >-
+      HOME_SEMAPHORE_REPOSITORY=Ansible-HOME, project={{ site_projects[0].id }},
+      owned_templates={{ catalog.tasks | length }},
+      IDs preserved, original Ansible-3 repository retained.

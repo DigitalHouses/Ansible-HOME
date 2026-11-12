@@ -223,6 +223,9 @@
         - current_template.playbook != item.playbook
       no_log: true
 
+    - name: Preserve existing Semaphore IDs while switching HOME repositories
+      ansible.builtin.import_tasks: ../tasks/semaphore-home-cutover.yml
+
     - name: Report catalog sync
       ansible.builtin.debug:
         msg: >-
