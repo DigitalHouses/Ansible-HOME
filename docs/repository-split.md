@@ -33,8 +33,15 @@ Original source: b97b840 feat/bootstrap-home-core.
   2026-11-12 from `DigitalHouses/Ansible-HOMES`); default branch `main`.
 - The source repository `DigitalHouses/Ansible-3` is archived read-only but
   remains cloneable for existing Semaphore tasks and historical checkout.
-- **Existing HOME Semaphore cutover has NOT been verified or executed here.**
-  Each HOME site must independently move its Semaphore repository and
-  inventory references to Ansible-HOME and smoke-test task 00. Keep the
-  original task/template IDs, credentials and history.
-- No HOME PVE, Media/PBS or Cloudflare changes were made here.
+- **serzhan-home: live Semaphore cutover ACCEPTED on 2026-11-12.**
+  Project ID 1; original task templates ID 1–10, Runner inventory ID 1,
+  original Git record ID 1 retained. New `Ansible-HOME/main` Git record ID 2.
+  Task 00 #42 success (repo migration); #43 success (Survey update);
+  #47 success from the dedicated DEV API token, `changed=0`.
+- **Task 08 accepted:** #45 direct SSH probe succeeded (Runner → DEV
+  `192.168.11.254`, identity `dev`); #46 succeeded, rotated dedicated
+  token and verified project-scoped API access from DEV. Temporary migration
+  admin token explicitly revoked; readback 401. No API credentials committed.
+- This is only the `serzhan-home` cutover. Other HOME sites require their
+  own checks and cutover; do not assume they have been migrated.
+- No HOME PVE, Media/PBS or Cloudflare service configuration was changed.
