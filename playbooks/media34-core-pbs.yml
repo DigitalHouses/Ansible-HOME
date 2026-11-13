@@ -74,6 +74,37 @@
           - pbs34_pin.stat.mode == '0600'
         fail_msg: PBS34_MEDIA_PIN_UNAVAILABLE
 
+    - name: Read HOME PVE guest inventory to select one first backup
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=7
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/pvesh
+          - get
+          - /cluster/resources
+          - --type
+          - vm
+          - --output-format
+          - json
+      register: pbs34_pve_guests
+      changed_when: false
+
+    - name: Report VM/LXC identity status and disk size for one manual PBS backup
+      ansible.builtin.debug:
+        msg: >-
+          PBS34_GUESTS={{ (pbs34_pve_guests.stdout | from_json)
+                         | json_query('[].{vmid:vmid,name:name,type:type,status:status,disk:disk,maxdisk:maxdisk}') }}
+
     - name: Read existing PVE backup jobs without modifying them
       ansible.builtin.command:
         argv:
