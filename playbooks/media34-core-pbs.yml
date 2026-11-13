@@ -122,6 +122,33 @@
       changed_when: false
       failed_when: false
 
+    - name: Read block devices visible directly on HOME PVE without modification
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=7
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/lsblk
+          - -b
+          - -o
+          - NAME,SIZE,TYPE,MODEL,SERIAL,FSTYPE
+      register: pbs34_pve_disks
+      changed_when: false
+      failed_when: false
+
+    - name: Show PVE-visible disk identities and capacity only
+      ansible.builtin.debug:
+        msg: "PBS34_PVE_HOST_DISKS={{ pbs34_pve_disks.stdout_lines if pbs34_pve_disks.rc == 0 else 'NOT_VISIBLE_TO_PVE' }}"
+
     - name: Read existing media VM passthrough configuration from HOME PVE
       ansible.builtin.command:
         argv:
