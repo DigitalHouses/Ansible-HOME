@@ -27,9 +27,12 @@
     - name: Ensure production code normalizes real Tailscale null fields
       ansible.builtin.assert:
         that:
-          - "'home71_prefs.ExitNodeID | default(\'\', true)' in task_source"
-          - "'home71_prefs.ExitNodeIP | default(\'\', true)' in task_source"
-          - "'home71_prefs.AdvertiseRoutes | default([], true)' in task_source"
+          - >-
+            "home71_prefs.ExitNodeID | default('', true)" in task_source
+          - >-
+            "home71_prefs.ExitNodeIP | default('', true)" in task_source
+          - >-
+            "home71_prefs.AdvertiseRoutes | default([], true)" in task_source
 
     - name: Evaluate null-safe healthy preferences without TypeError
       ansible.builtin.set_fact:
