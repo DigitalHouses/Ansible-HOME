@@ -101,9 +101,12 @@
 
     - name: Report VM/LXC identity status and disk size for one manual PBS backup
       ansible.builtin.debug:
-        msg: >-
-          PBS34_GUESTS={{ (pbs34_pve_guests.stdout | from_json)
-                         | json_query('[].{vmid:vmid,name:name,type:type,status:status,disk:disk,maxdisk:maxdisk}') }}
+        msg:
+          - "PBS34_GUEST_IDS={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='vmid') | list }}"
+          - "PBS34_GUEST_NAMES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='name') | list }}"
+          - "PBS34_GUEST_TYPES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='type') | list }}"
+          - "PBS34_GUEST_STATUSES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='status') | list }}"
+          - "PBS34_GUEST_MAXDISK_BYTES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='maxdisk') | list }}"
 
     - name: Read existing PVE backup jobs without modifying them
       ansible.builtin.command:
