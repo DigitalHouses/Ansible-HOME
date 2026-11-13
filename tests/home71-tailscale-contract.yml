@@ -24,7 +24,7 @@
           - entrypoint[1].serial == 1
           - entrypoint | to_json is search('media80_known_hosts')
           - entrypoint | to_json is search('DH_TAILSCALE_AUTH_KEY')
-          - 'DH_INPUT_TAILSCALE_AUTH_KEY' in (creds_templates[0].survey_vars | map(attribute='name') | list)
+          - "'DH_INPUT_TAILSCALE_AUTH_KEY' in (creds_templates[0].survey_vars | map(attribute='name') | list)"
           - credentials | to_json is search('DH_INPUT_TAILSCALE_AUTH_KEY')
           - credentials | to_json is search('DH_TAILSCALE_AUTH_KEY')
 
