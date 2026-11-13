@@ -20,6 +20,11 @@
           - entries[0].playbook == 'playbooks/media34-core-pbs.yml'
           - entries[0].survey_vars[0].default_value == 'audit'
           - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage']
+          - entries[0].survey_vars[0]['values'][0].name is search('01.*Проверить')
+          - entries[0].survey_vars[0]['values'][1].name is search('02.*НЕ отправлять')
+          - entries[0].survey_vars[0]['values'][2].name is search('03.*ОТПРАВИТЬ')
+          - entries[0].survey_vars[0]['values'][3].name is search('04.*восстановления')
+          - entries[0].survey_vars[0].default_value == 'audit'
           - pb | length == 3
           - "'DH_CORE_PBS_PUSH_TOKEN_SECRET' in (creds | to_json)"
           - "'DH_CORE_PBS_RESTORE_TOKEN_SECRET' in (creds | to_json)"
