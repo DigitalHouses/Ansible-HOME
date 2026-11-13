@@ -1,6 +1,18 @@
 # №34 — HOME PBS для центрального CORE Pull Sync
 
-Состояние: **аудит завершён; создание токена заблокировано отсутствием источника** (13.11.2026).
+Состояние: **HOME PBS datastore и CORE read-only token готовы** (13.11.2026).
+Успешный destructive test медиасервера №30 #97: `VM2223`, IP `192.168.11.223`, `recreate + erase` (старая информация о ZFS и Hitachi ниже относится к состоянию **до** этого запуска).
+№33 #98: `Success`, создан и смонтирован `serzhan-pool/pbs-serzhan`, зарегистрированы PBS datastore/PVE Storage `pbs-serzhan`, расписание `dh-local-pbs-serzhan`.
+№34 #102: `Success` — создан `root@pam!core-pull`, ACL `DatastoreReader` и `DatastoreAudit` **только** на `/datastore/pbs-serzhan`, проверено чтение namespaces/groups через токен, сохранён секрет `0600` на HOME и DEV.
+№34 #103: `Success`, `changed=0`, `failed=0` — повторный apply не изменил токен, ACL и секреты.
+
+**Актуальный TLS SHA-256 после пересоздания VM:** `4D:B5:B7:23:8A:73:91:68:49:9C:86:62:05:08:2B:16:9A:D9:47:21:DD:94:5C:EE:51:6D:90:8C:08:CA:FA:BD`. Старый SHA-256 ниже **недействителен**.
+
+**Параметры для CORE №50:** Remote `192.168.11.223:8007`, source datastore `pbs-serzhan`, namespace root `/` (в API `ns: ""`), Token ID `root@pam!core-pull`. Секрет только в `/home/dev/.config/ansible-home/serzhan-home-pbs-core-pull.secret`, mode `0600`; в CORE Semaphore №05 ввести через защищённый secret-параметр, **не копировать в чат или Git**. Текущие backup groups и snapshots **0** после чистого развёртывания; для проверки фактического Pull Sync нужен хотя бы один завершённый backup. CORE не менялся.
+
+### Исторический аудит до destructive test
+
+Следующие данные описывают исходное состояние до №30 #97 и сохраняются только для диагностики.
 Проект `DigitalHouses/Ansible-HOME`, Semaphore `serzhan-home` project ID 1, шаблон **ID 11**.
 Режимы: `audit` (по умолчанию, без изменений), `apply` (только после появления исходного datastore).
 
