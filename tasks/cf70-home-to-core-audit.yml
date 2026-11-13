@@ -89,4 +89,6 @@
       - "CF70_WARP_STATUS={{ cf70_warp_status.stdout_lines | default([]) }}"
       - "CF70_CLOUDFLARED_ACTIVE={{ cf70_cloudflared_service.stdout | default('inactive', true) }}"
       - "CF70_CORE_PBS_HTTPS={{ cf70_outbound_https.stdout if cf70_outbound_https.rc == 0 else 'UNAVAILABLE' }}"
+      - "CF70_CORE_PBS_HTTPS_RC={{ cf70_outbound_https.rc }}"
+      - "CF70_CORE_PBS_HTTPS_ERROR={{ cf70_outbound_https.stderr | default('') | trim }}"
       - "CF70_TRANSPORT_PROOF=HTTPS alone is NOT Cloudflare path proof; require actual route via WARP"

@@ -339,6 +339,7 @@
         - {name: cf70_home_media, ip: 192.168.11.223, user: debian}
       loop_control:
         label: "{{ item.name }}"
+      changed_when: false
       when:
         - cf70_action == 'audit'
         - site_id == 'serzhan-home'
