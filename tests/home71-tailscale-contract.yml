@@ -1,0 +1,46 @@
+---
+- name: Verify HOME Tailscale catalog and safety contract
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    catalog: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    entrypoint: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/home-tailscale.yml') | from_yaml }}"
+    actions: "{{ lookup('ansible.builtin.file', root ~ '/tasks/home71-tailscale-node.yml') | from_yaml }}"
+    credentials: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/obtain-site-credentials.yml') | from_yaml }}"
+    ts_templates: "{{ catalog.tasks | selectattr('name', 'equalto', '71-Tailscale') | list }}"
+    creds_templates: "{{ catalog.tasks | selectattr('name', 'equalto', '05-Ввести и проверить credentials') | list }}"
+  tasks:
+    - name: Validate default-safe Semaphore survey and pinned host discovery
+      ansible.builtin.assert:
+        that:
+          - ts_templates | length == 1
+          - ts_templates[0].playbook == 'playbooks/home-tailscale.yml'
+          - ts_templates[0].survey_vars[0].default_value == 'audit'
+          - ts_templates[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','install','configure','join','update']
+          - ts_templates[0].survey_vars[1]['values'] | map(attribute='value') | list == ['pve','pbs','both']
+          - entrypoint | length == 2
+          - entrypoint[1].serial == 1
+          - entrypoint | to_json is search('media80_known_hosts')
+          - entrypoint | to_json is search('DH_TAILSCALE_AUTH_KEY')
+          - "'DH_INPUT_TAILSCALE_AUTH_KEY' in (creds_templates[0].survey_vars | map(attribute='name') | list)"
+          - credentials | to_json is search('DH_INPUT_TAILSCALE_AUTH_KEY')
+          - credentials | to_json is search('DH_TAILSCALE_AUTH_KEY')
+
+    - name: Validate only targeted APT operation and no external route takeover
+      ansible.builtin.assert:
+        that:
+          - actions | to_json is search('only_upgrade')
+          - actions | to_json is search('state.*latest')
+          - actions | to_json is search('ansible.builtin.get_url')
+          - actions | to_json is search('accept-dns=false')
+          - actions | to_json is search('accept-routes=false')
+          - actions | to_json is search('auto-update=false')
+          - actions | to_json is search('file:/run/dh-home71-tailscale-auth-key')
+          - actions | to_json is search('Remove temporary auth-key')
+          - actions | to_json is search('HOME71_LOCAL_NETWORK_CHANGED')
+          - actions | to_json is not search('apt-get upgrade')
+          - actions | to_json is not search('curl\\|sh')
+          - actions | to_json is not search('cloudflare-warp')
+          - actions | to_json is not search('vzdump')
