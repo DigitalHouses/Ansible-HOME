@@ -6,7 +6,7 @@
 ## Потоки и ответственность
 
 - HOME PVE создаёт локальные backup VM/LXC в HOME PBS (№33); локальный PBS автономен.
-- HOME PBS самостоятельно инициирует **PBS Push Sync** к CORE PBS на `192.168.11.243:8007`, datastore `pbs-core`, destination namespace `<site-id>`. Для центральной истории `remove-vanished=false`.
+- HOME PBS самостоятельно инициирует **PBS Push Sync** к CORE PBS на Tailscale `100.97.126.67:8007`, datastore `pbs-core`, destination namespace `<site-id>`. Для центральной истории `remove-vanished=false`.
 - HOME PVE отдельно подключает CORE PBS только для **Restore**, через то же защищённое направление HOME → CORE, с read credentials своего namespace.
 - CORE владеет namespace, Push/Restore credentials и центральной политикой хранения, Verify и Restore-тестами. HOME управляет локальными задачами и своим Push Sync. Режим CORE Pull и HOME `root@pam!core-pull` — исторические, **не удалять до завершения пилотов**.
 - Каждый дом уникален по namespace и credentials. CORE №10 HOME Registry пока не реализован.
@@ -19,16 +19,17 @@
 | №30 Media Server | Развертывает VM, PBS и ZFS; `import` существующего диска или явно разрешённый `erase` |
 | №33 Local Backup | Рабочие локальные PBS datastore, PVE Backup Jobs и обслуживание |
 | №34 Central Backup (план) | HOME PBS Remote, Push Sync, ручной пилот и восстановление; текущая Pull-реализация историческая |
-| №70 Cloudflare | Защищённый маршрут HOME → CORE; существующий CORE → HOME сохраняется |
+| №70 Cloudflare | Веб-доступ через Tunnel + Access, без WARP |
+| №71 Tailscale | Приватная связность HOME PVE и PBS с CORE PBS; контролируемые обновления |
 
-## Защищённый транспорт
+## Защищённый транспорт — Tailscale (решение 13.11.2026)
 
-- Один **сетевой маршрут** HOME → CORE PBS `192.168.11.243/32` используется двумя исходящими приложениями: Push от HOME PBS и Restore от HOME PVE. Это не требование единственного TCP-сеанса или WARP-инстанса.
-- Поддерживаемый минимальный пилот: headless Cloudflare One Client **на каждом из двух endpoint-хостов**, HOME PVE и Media VM. Один CORE private CIDR route. Не создавать новые публичные адреса или Mesh по умолчанию.
-- WARP endpoint не рассматриваем как штатный сетевой шлюз для других хостов. Имеющийся `cloudflared` на HOME PVE остаётся самостоятельным входящим коннектором.
-- Для HOME c совпадающими подсетями строго ограниченный /32 и подтверждение эффективного пути из каждого источника обязательны.
-- **Транспорт не активировать без отдельного согласования**, пока CORE в своём проекте не подтвердит свой connector, CIDR route и enroll credentials. Любой `HTTP 200/401` без подтверждения WARP пути не является доказательством.
-- При включении клиента обеспечить проверку переподключения после перезапуска и rollback, не ломая HOME Tunnel.
+- CORE PVE `100.64.243.13`, CORE PBS `100.97.126.67:8007` уже подключены к общему tailnet. CORE WARP удалён; HOME не изменяет CORE.
+- HOME PVE уже имеет Tailscale как резервный административный путь. HOME PBS подключается самостоятельным клиентом через HOME №71 (`audit/install/configure/join/update`). Home Assistant этой задачей не изменяется.
+- HOME PVE и HOME PBS независимо обращаются к **одному Tailscale адресу CORE PBS** для Restore и Push соответственно. Это не означает общего TCP-сеанса; не требуется сетевой шлюз или маршрутизация LAN через PVE.
+- Действующие LAN DNS и default route не менять: `accept-dns=false`, `accept-routes=false`, без exit node/subnet routing. Совпадающие подсети `192.168.11.0/24` не мешают, потому что используются конкретные Tailscale IP.
+- Cloudflare Tunnel + Access остаются для веб-интерфейсов. Ранее опробованный Cloudflare private route CORE → HOME `192.168.11.223/32` и план WARP HOME → CORE — **история, не целевая схема**. Не удалять legacy route до отдельной проверки необходимости, но новый PBS Push через него не строить.
+- Транспорт проверять из обоих HOME источников, с подтверждением доступа `100.97.126.67:8007`, затем native PBS Push/Restore E2E. Простое HTTP 200/401 не подтверждает корректное резервирование.
 
 ## Принятый порядок аварийного восстановления
 
@@ -40,7 +41,7 @@
 
 Backblaze B2, MQTT и расписание Push Sync до E2E пилота не внедрять.
 
-## Read-only аудит №70
+## Исторический read-only аудит №70 (до решения Tailscale)
 
 - #110: Success, changed=0 — действующий Tunnel `serzhan-home` healthy, PVE `cloudflared` active, один connector.
 - #111: Success — проверены PVE и Media VM; внешний конфиг не менялся.
