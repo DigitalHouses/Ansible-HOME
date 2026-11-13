@@ -12,6 +12,7 @@ tasks:
       - {name: DH_INPUT_MEDIA_ROOT_PASSWORD, title: "Медиасервер — пароль Linux root / PBS root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub — токен доступа (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare — API-токен (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_TAILSCALE_AUTH_KEY, title: "Tailscale — ключ регистрации PBS (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_MQTT_BROKER_HOST, title: "MQTT — IP или имя брокера (пусто — оставить прежний)", type: "", target: env, required: false, values: []}
       - {name: DH_INPUT_MQTT_USERNAME, title: "MQTT — имя пользователя (пусто — оставить прежнее)", type: "", target: env, required: false, values: []}
       - {name: DH_INPUT_MQTT_PASSWORD, title: "MQTT — пароль (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
@@ -223,3 +224,30 @@ tasks:
         values:
           - {name: "Не обновлять работающие версии", value: "no"}
           - {name: "Обновить до закреплённых релизов", value: "yes"}
+
+  - name: "71-Tailscale"
+    playbook: playbooks/home-tailscale.yml
+    description: "Tailscale на HOME PVE и PBS: безопасный аудит, установка, настройка, join и контролируемое обновление; HA не изменяется"
+    survey_vars:
+      - name: DH_HOME71_ACTION
+        title: "Tailscale — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить состояние без изменений", value: audit}
+          - {name: "Установить пакет (без регистрации в tailnet)", value: install}
+          - {name: "Нормализовать настройки уже подключённого клиента", value: configure}
+          - {name: "Подключить новый узел в существующий tailnet", value: join}
+          - {name: "Обновить только пакет Tailscale", value: update}
+      - name: DH_HOME71_TARGET
+        title: "Tailscale — обслуживаемый узел"
+        type: enum
+        target: ""
+        required: true
+        default_value: both
+        values:
+          - {name: "Только PVE", value: pve}
+          - {name: "Только PBS", value: pbs}
+          - {name: "PVE, затем PBS", value: both}
