@@ -216,7 +216,7 @@
 
     - name: Read actual media guest block devices with capacities and identities
       ansible.builtin.command:
-        argv: [lsblk, -b, -o, NAME,SIZE,TYPE,FSTYPE,MODEL,SERIAL,MOUNTPOINTS]
+        argv: [lsblk, -b, -o, 'NAME,SIZE,TYPE,FSTYPE,MODEL,SERIAL,MOUNTPOINTS']
       register: pbs34_block_devices
       changed_when: false
 
