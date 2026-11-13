@@ -14,7 +14,7 @@
     - name: Require explicitly selected safe action and existing GitHub credential
       ansible.builtin.assert:
         that:
-          - pbs34_action in ['audit','apply']
+          - pbs34_action in ['audit','apply','backup_test']
           - pbs34_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - DH_GITHUB_PROVISION_TOKEN | default('',true) | length > 0
         fail_msg: PBS34_INVALID_SITE_OR_ACTION
@@ -216,6 +216,17 @@
           - "PBS34_PVE_BACKUP_JOBS={{ (pbs34_pve_jobs.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
           - "PBS34_PVE_STORAGES={{ (pbs34_pve_storages.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_storages.rc == 0 else 'UNAVAILABLE' }}"
           - "PBS34_PVE_BACKUP_DEFINITIONS={{ (pbs34_pve_jobs.stdout | from_json) if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
+
+    - name: Select the exact guest for one-off backup
+      ansible.builtin.set_fact:
+        pbs34_pve_guest_candidates: >-
+          {{ (pbs34_pve_guests.stdout | from_json)
+             | selectattr('vmid','equalto',200) | list }}
+      when: pbs34_action == 'backup_test'
+
+    - name: Perform the explicitly requested first backup to HOME PBS
+      ansible.builtin.include_tasks: ../tasks/media34-first-backup.yml
+      when: pbs34_action == 'backup_test'
 
     - name: Register the existing media guest without changing it
       ansible.builtin.add_host:

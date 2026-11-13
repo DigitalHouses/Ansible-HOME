@@ -201,6 +201,7 @@ tasks:
         values:
           - {name: "Аудит PBS без изменений", value: audit}
           - {name: "Создать/проверить read-only токен CORE", value: apply}
+          - {name: "Разовый тест: первый backup CT200 → HOME PBS", value: backup_test}
   - name: "60-DigitalHouses Agents"
     playbook: playbooks/digitalhouses-agents.yml
     description: "После настройки медиасервера: установить, проверить или обновить PVE Agent и Plex Agent; без VM и ZFS операций"
