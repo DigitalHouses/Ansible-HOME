@@ -1,5 +1,11 @@
 ---
 # A dedicated PVE PBS storage for reading CORE copies. No vzdump job targets CORE.
+- name: Resolve nonsecret CORE restore fields from Semaphore native environment
+  ansible.builtin.set_fact:
+    home34_restore_auth_id: "{{ DH_CORE_PBS_RESTORE_AUTH_ID | default(lookup('ansible.builtin.env', 'DH_CORE_PBS_RESTORE_AUTH_ID'), true) | trim }}"
+    home34_pinned_fingerprint: "{{ DH_CORE_PBS_FINGERPRINT | default(lookup('ansible.builtin.env', 'DH_CORE_PBS_FINGERPRINT'), true) | trim | lower }}"
+  no_log: true
+
 - name: Verify this is the pinned existing HOME PVE
   ansible.builtin.command:
     argv: [hostname, -s]
@@ -10,10 +16,10 @@
 - name: Require CORE-issued read-only restore token and trusted CORE TLS fingerprint
   ansible.builtin.assert:
     that:
-      - DH_CORE_PBS_RESTORE_AUTH_ID | default('', true) is match('^[A-Za-z0-9_.-]+@(pbs|pam)![A-Za-z0-9_.-]+$')
+      - home34_restore_auth_id | default('', true) is match('^[A-Za-z0-9_.-]+@(pbs|pam)![A-Za-z0-9_.-]+$')
       - DH_CORE_PBS_RESTORE_TOKEN_SECRET | default('', true) | length >= 24
-      - DH_CORE_PBS_FINGERPRINT | default('', true) | lower is match('^([a-f0-9]{2}:){31}[a-f0-9]{2}$')
-      - DH_CORE_PBS_FINGERPRINT | lower == hostvars['home34_pbs'].home34_observed_fingerprint
+      - home34_pinned_fingerprint | default('', true) | lower is match('^([a-f0-9]{2}:){31}[a-f0-9]{2}$')
+      - home34_pinned_fingerprint | lower == hostvars['home34_pbs'].home34_observed_fingerprint
     fail_msg: HOME34_RESTORE_CREDENTIALS_REQUIRED_FROM_CORE50
   no_log: true
 
@@ -60,7 +66,7 @@
          home34_pve_existing_restore[0].server == home34_core_ip and
          home34_pve_existing_restore[0].datastore == home34_core_store and
          home34_pve_existing_restore[0].namespace == home34_site.id and
-         home34_pve_existing_restore[0].username == DH_CORE_PBS_RESTORE_AUTH_ID)
+         home34_pve_existing_restore[0].username == home34_restore_auth_id)
     fail_msg: HOME34_RESTORE_STORAGE_OR_BACKUP_JOB_CONFLICT
 
 - name: Add read-only CORE PBS restore target without a credential in CLI args
@@ -75,8 +81,8 @@
         --server {{ home34_core_ip }}
         --datastore {{ home34_core_store }}
         --namespace {{ home34_site.id }}
-        --username {{ DH_CORE_PBS_RESTORE_AUTH_ID }}
-        --fingerprint {{ DH_CORE_PBS_FINGERPRINT | lower }}
+        --username {{ home34_restore_auth_id }}
+        --fingerprint {{ home34_pinned_fingerprint | lower }}
         --content backup --password
       - /dev/null
     stdin: "{{ DH_CORE_PBS_RESTORE_TOKEN_SECRET }}"
@@ -97,8 +103,8 @@
       - (home34_pve_restored_config.stdout | from_json).server == home34_core_ip
       - (home34_pve_restored_config.stdout | from_json).datastore == home34_core_store
       - (home34_pve_restored_config.stdout | from_json).namespace == home34_site.id
-      - (home34_pve_restored_config.stdout | from_json).username == DH_CORE_PBS_RESTORE_AUTH_ID
-      - (home34_pve_restored_config.stdout | from_json).fingerprint | lower == DH_CORE_PBS_FINGERPRINT | lower
+      - (home34_pve_restored_config.stdout | from_json).username == home34_restore_auth_id
+      - (home34_pve_restored_config.stdout | from_json).fingerprint | lower == home34_pinned_fingerprint | lower
     fail_msg: HOME34_RESTORE_STORAGE_READBACK_CONFLICT
   no_log: true
 
