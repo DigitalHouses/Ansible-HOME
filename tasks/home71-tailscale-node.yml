@@ -280,5 +280,5 @@
       - "HOME71_PACKAGE={{ home71_pkg_after.stdout if home71_pkg_after.rc == 0 else 'NOT_INSTALLED' }}"
       - "HOME71_TAILNET={{ (home71_state_joined.stdout | from_json).BackendState if home71_pkg_after.rc == 0 and home71_state_joined.rc | default(1) == 0 else 'NOT_CONNECTED' }}"
       - "HOME71_TAILNET_IP={{ home71_tailnet_ip.stdout | default('NOT_ASSIGNED', true) | trim }}"
-      - "HOME71_CORE_PBS_8007={{ 'REACHABLE' if home71_core_tcp is defined and home71_core_tcp is succeeded and not home71_core_tcp.skipped | default(false) else 'NOT_VERIFIED' }}"
+      - "HOME71_CORE_PBS_8007={{ 'REACHABLE' if (home71_core_tcp is defined and home71_core_tcp.state | default('') == 'started' and 'msg' not in home71_core_tcp) else 'NOT_VERIFIED' }}"
       - HOME71_DEFAULT_ROUTE_AND_DNS=UNCHANGED
