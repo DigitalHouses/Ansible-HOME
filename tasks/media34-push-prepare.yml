@@ -1,16 +1,255 @@
 ---
 # Create only HOME PBS Remote + manual Push Sync. No CORE/PVE changes, schedules or deletion.
 # Remote token must be provisioned independently by CORE №50, then saved in HOME №05.
-- name: Validate CORE-provided identity, secret, pinned fingerprint and local PBS admin access
+# Native Semaphore Variable Group exposes nonsecret identity fields and protected
+# secrets as Ansible variables on the PBS target. Report statuses, NEVER values.
+- name: Evaluate each HOME34 credential independently without exposing its value
+  ansible.builtin.set_fact:
+    home34_push_auth_status: >-
+      {{ 'MISSING' if (DH_CORE_PBS_PUSH_AUTH_ID | default('', true) | trim | length) == 0
+         else ('OK' if (DH_CORE_PBS_PUSH_AUTH_ID | trim) is match('^[A-Za-z0-9_.-]+@(pbs|pam)![A-Za-z0-9_.-]+
+
+- name: Refuse an already provisioned Remote with a different CORE identity
+  ansible.builtin.assert:
+    that: >-
+      home34_existing_remote | length == 0 or
+      home34_existing_remote[0]['auth-id'] == DH_CORE_PBS_PUSH_AUTH_ID
+    fail_msg: HOME34_REMOTE_AUTH_ID_CONFLICT
+
+- name: Obtain one short-lived PBS admin ticket over localhost HTTPS
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/api2/json/access/ticket
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: root@pam
+      password: "{{ DH_MEDIA_ROOT_PASSWORD }}"
+    validate_certs: false  # PBS own loopback only; CORE TLS is separately fingerprint-pinned
+    use_proxy: false
+    status_code: 200
+  register: home34_local_ticket
+  no_log: true
+
+- name: Require a valid local PBS ticket before any configuration write
   ansible.builtin.assert:
     that:
-      - DH_CORE_PBS_PUSH_AUTH_ID | default('', true) is match('^[A-Za-z0-9_.-]+@(pbs|pam)![A-Za-z0-9_.-]+$')
-      - DH_CORE_PBS_PUSH_TOKEN_SECRET | default('', true) | length >= 24
-      - DH_CORE_PBS_FINGERPRINT | default('', true) | lower is match('^([a-f0-9]{2}:){31}[a-f0-9]{2}$')
-      - DH_CORE_PBS_FINGERPRINT | lower == home34_observed_fingerprint
-      - DH_MEDIA_ROOT_PASSWORD | default('', true) | length > 0
-    fail_msg: HOME34_CORE50_CREDENTIALS_FINGERPRINT_OR_HOME_PBS_PASSWORD_MISSING
+      - home34_local_ticket.json.data.ticket | default('') | length > 0
+      - home34_local_ticket.json.data.CSRFPreventionToken | default('') | length > 0
+    fail_msg: HOME34_LOCAL_PBS_ADMIN_TICKET_UNAVAILABLE
   no_log: true
+
+- name: Create the site-specific CORE Remote only when missing
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/api2/json/config/remote
+    method: POST
+    body_format: form-urlencoded
+    body:
+      name: "{{ home34_remote }}"
+      "auth-id": "{{ DH_CORE_PBS_PUSH_AUTH_ID }}"
+      host: "{{ home34_core_ip }}"
+      port: "8007"
+      fingerprint: "{{ home34_observed_fingerprint }}"
+      password: "{{ DH_CORE_PBS_PUSH_TOKEN_SECRET }}"
+    headers:
+      Cookie: "PBSAuthCookie={{ home34_local_ticket.json.data.ticket }}"
+      CSRFPreventionToken: "{{ home34_local_ticket.json.data.CSRFPreventionToken }}"
+    validate_certs: false
+    use_proxy: false
+    status_code: 200
+  no_log: true
+  when: home34_existing_remote | length == 0
+
+- name: Create a manually triggered HOME Push job only when missing
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/api2/json/config/sync
+    method: POST
+    body_format: form-urlencoded
+    body:
+      id: "{{ home34_job }}"
+      store: "{{ home34_store }}"
+      remote: "{{ home34_remote }}"
+      "remote-store": "{{ home34_core_store }}"
+      "remote-ns": "{{ home34_site.id }}"
+      "sync-direction": push
+      "remove-vanished": "0"
+    headers:
+      Cookie: "PBSAuthCookie={{ home34_local_ticket.json.data.ticket }}"
+      CSRFPreventionToken: "{{ home34_local_ticket.json.data.CSRFPreventionToken }}"
+    validate_certs: false
+    use_proxy: false
+    status_code: 200
+  no_log: true
+  when: home34_existing_job | length == 0
+
+- name: Read back exactly the native site-owned Push job
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, sync-job, show, "{{ home34_job }}", --output-format, json]
+  register: home34_job_readback
+  changed_when: false
+
+- name: Refuse a different target, namespace, direction or deletion policy
+  ansible.builtin.assert:
+    that:
+      - (home34_job_readback.stdout | from_json).store == home34_store
+      - (home34_job_readback.stdout | from_json).remote == home34_remote
+      - (home34_job_readback.stdout | from_json)['remote-store'] == home34_core_store
+      - (home34_job_readback.stdout | from_json)['remote-ns'] == home34_site.id
+      - (home34_job_readback.stdout | from_json)['sync-direction'] == 'push'
+      - not (home34_job_readback.stdout | from_json)['remove-vanished'] | default(false) | bool
+      - (home34_job_readback.stdout | from_json).schedule | default('', true) == ''
+    fail_msg: HOME34_PUSH_JOB_READBACK_MISMATCH
+
+- name: Confirm manual Push job is prepared but has not been started
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_PREPARED={{ home34_job }}"
+      - "HOME34_TARGET={{ home34_core_ip }}/{{ home34_core_store }}/{{ home34_site.id }}"
+      - HOME34_PUSH_EXECUTED=false
+      - HOME34_SCHEDULE=NONE
+)
+               else 'INVALID') }}
+    home34_push_secret_status: >-
+      {{ 'MISSING' if (DH_CORE_PBS_PUSH_TOKEN_SECRET | default('', true) | length) == 0
+         else ('OK' if (DH_CORE_PBS_PUSH_TOKEN_SECRET | length) >= 24 else 'INVALID') }}
+    home34_fingerprint_status: >-
+      {{ 'MISSING' if (DH_CORE_PBS_FINGERPRINT | default('', true) | trim | length) == 0
+         else ('OK' if
+           ((DH_CORE_PBS_FINGERPRINT | trim | lower)
+             is match('^([a-f0-9]{2}:){31}[a-f0-9]{2}
+
+- name: Refuse an already provisioned Remote with a different CORE identity
+  ansible.builtin.assert:
+    that: >-
+      home34_existing_remote | length == 0 or
+      home34_existing_remote[0]['auth-id'] == DH_CORE_PBS_PUSH_AUTH_ID
+    fail_msg: HOME34_REMOTE_AUTH_ID_CONFLICT
+
+- name: Obtain one short-lived PBS admin ticket over localhost HTTPS
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/api2/json/access/ticket
+    method: POST
+    body_format: form-urlencoded
+    body:
+      username: root@pam
+      password: "{{ DH_MEDIA_ROOT_PASSWORD }}"
+    validate_certs: false  # PBS own loopback only; CORE TLS is separately fingerprint-pinned
+    use_proxy: false
+    status_code: 200
+  register: home34_local_ticket
+  no_log: true
+
+- name: Require a valid local PBS ticket before any configuration write
+  ansible.builtin.assert:
+    that:
+      - home34_local_ticket.json.data.ticket | default('') | length > 0
+      - home34_local_ticket.json.data.CSRFPreventionToken | default('') | length > 0
+    fail_msg: HOME34_LOCAL_PBS_ADMIN_TICKET_UNAVAILABLE
+  no_log: true
+
+- name: Create the site-specific CORE Remote only when missing
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/api2/json/config/remote
+    method: POST
+    body_format: form-urlencoded
+    body:
+      name: "{{ home34_remote }}"
+      "auth-id": "{{ DH_CORE_PBS_PUSH_AUTH_ID }}"
+      host: "{{ home34_core_ip }}"
+      port: "8007"
+      fingerprint: "{{ home34_observed_fingerprint }}"
+      password: "{{ DH_CORE_PBS_PUSH_TOKEN_SECRET }}"
+    headers:
+      Cookie: "PBSAuthCookie={{ home34_local_ticket.json.data.ticket }}"
+      CSRFPreventionToken: "{{ home34_local_ticket.json.data.CSRFPreventionToken }}"
+    validate_certs: false
+    use_proxy: false
+    status_code: 200
+  no_log: true
+  when: home34_existing_remote | length == 0
+
+- name: Create a manually triggered HOME Push job only when missing
+  ansible.builtin.uri:
+    url: https://127.0.0.1:8007/api2/json/config/sync
+    method: POST
+    body_format: form-urlencoded
+    body:
+      id: "{{ home34_job }}"
+      store: "{{ home34_store }}"
+      remote: "{{ home34_remote }}"
+      "remote-store": "{{ home34_core_store }}"
+      "remote-ns": "{{ home34_site.id }}"
+      "sync-direction": push
+      "remove-vanished": "0"
+    headers:
+      Cookie: "PBSAuthCookie={{ home34_local_ticket.json.data.ticket }}"
+      CSRFPreventionToken: "{{ home34_local_ticket.json.data.CSRFPreventionToken }}"
+    validate_certs: false
+    use_proxy: false
+    status_code: 200
+  no_log: true
+  when: home34_existing_job | length == 0
+
+- name: Read back exactly the native site-owned Push job
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, sync-job, show, "{{ home34_job }}", --output-format, json]
+  register: home34_job_readback
+  changed_when: false
+
+- name: Refuse a different target, namespace, direction or deletion policy
+  ansible.builtin.assert:
+    that:
+      - (home34_job_readback.stdout | from_json).store == home34_store
+      - (home34_job_readback.stdout | from_json).remote == home34_remote
+      - (home34_job_readback.stdout | from_json)['remote-store'] == home34_core_store
+      - (home34_job_readback.stdout | from_json)['remote-ns'] == home34_site.id
+      - (home34_job_readback.stdout | from_json)['sync-direction'] == 'push'
+      - not (home34_job_readback.stdout | from_json)['remove-vanished'] | default(false) | bool
+      - (home34_job_readback.stdout | from_json).schedule | default('', true) == ''
+    fail_msg: HOME34_PUSH_JOB_READBACK_MISMATCH
+
+- name: Confirm manual Push job is prepared but has not been started
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_PREPARED={{ home34_job }}"
+      - "HOME34_TARGET={{ home34_core_ip }}/{{ home34_core_store }}/{{ home34_site.id }}"
+      - HOME34_PUSH_EXECUTED=false
+      - HOME34_SCHEDULE=NONE
+))
+           and ((DH_CORE_PBS_FINGERPRINT | trim | lower) == home34_observed_fingerprint)
+           else 'INVALID') }}
+    home34_root_password_status: >-
+      {{ 'MISSING' if (DH_MEDIA_ROOT_PASSWORD | default('', true) | length) == 0 else 'OK' }}
+  no_log: true
+
+- name: Report credential delivery diagnostics without secrets or lengths
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_PUSH_AUTH_ID={{ home34_push_auth_status }}"
+      - "HOME34_PUSH_TOKEN_SECRET={{ home34_push_secret_status }}"
+      - "HOME34_CORE_TLS_FINGERPRINT={{ home34_fingerprint_status }}"
+      - "HOME34_LOCAL_PBS_ROOT_PAM_PASSWORD={{ home34_root_password_status }}"
+      - HOME34_PBS_TICKET_PRINCIPAL=root@pam
+      - HOME34_PBS_ADMIN_PBS_PASSWORD=NOT_USED
+
+- name: Require CORE Push Auth ID from HOME05
+  ansible.builtin.assert:
+    that: home34_push_auth_status == 'OK'
+    fail_msg: HOME34_PUSH_AUTH_ID_MISSING_OR_INVALID
+
+- name: Require native CORE Push Secret from HOME05
+  ansible.builtin.assert:
+    that: home34_push_secret_status == 'OK'
+    fail_msg: HOME34_PUSH_SECRET_MISSING_OR_INVALID
+
+- name: Require independently pinned CORE PBS TLS fingerprint
+  ansible.builtin.assert:
+    that: home34_fingerprint_status == 'OK'
+    fail_msg: HOME34_CORE_FINGERPRINT_MISSING_OR_MISMATCH
+
+- name: Require HOME PBS Linux root password for local root@pam API ticket
+  ansible.builtin.assert:
+    that: home34_root_password_status == 'OK'
+    fail_msg: HOME34_MEDIA_ROOT_PASSWORD_MISSING_IN_HOME05
 
 - name: Refuse an already provisioned Remote with a different CORE identity
   ansible.builtin.assert:
