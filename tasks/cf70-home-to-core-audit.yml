@@ -1,0 +1,92 @@
+---
+# Read-only HOME -> CORE transport audit. Never installs WARP or changes routes.
+- name: Read the effective route to CORE PBS 192.168.11.243
+  ansible.builtin.command:
+    argv: [ip, -4, route, get, '192.168.11.243']
+  register: cf70_outbound_route
+  changed_when: false
+  failed_when: false
+
+- name: Read existing Linux routing policy rules
+  ansible.builtin.command:
+    argv: [ip, -4, rule, show]
+  register: cf70_outbound_rules
+  changed_when: false
+  failed_when: false
+
+- name: Read existing Linux route tables without modification
+  ansible.builtin.command:
+    argv: [ip, -4, route, show, table, all]
+  register: cf70_outbound_tables
+  changed_when: false
+  failed_when: false
+
+- name: Detect native Cloudflare One Client binary
+  ansible.builtin.stat:
+    path: /usr/bin/warp-cli
+    follow: false
+  register: cf70_warp_binary
+
+- name: Read Cloudflare One Client daemon status without starting it
+  ansible.builtin.command:
+    argv: [systemctl, is-active, warp-svc.service]
+  register: cf70_warp_service
+  changed_when: false
+  failed_when: false
+
+- name: Read Cloudflare One Client daemon boot policy without changing it
+  ansible.builtin.command:
+    argv: [systemctl, is-enabled, warp-svc.service]
+  register: cf70_warp_enabled
+  changed_when: false
+  failed_when: false
+
+- name: Read Cloudflare One Client connection status if installed
+  ansible.builtin.command:
+    argv: [/usr/bin/warp-cli, status]
+  register: cf70_warp_status
+  changed_when: false
+  failed_when: false
+  when: cf70_warp_binary.stat.isreg | default(false)
+
+- name: Confirm whether this host has the inbound Cloudflare connector
+  ansible.builtin.command:
+    argv: [systemctl, is-active, cloudflared.service]
+  register: cf70_cloudflared_service
+  changed_when: false
+  failed_when: false
+
+- name: Read only the CORE PBS HTTPS response, without treating it as proof of WARP
+  ansible.builtin.command:
+    argv:
+      - curl
+      - --noproxy
+      - '*'
+      - --insecure
+      - --silent
+      - --show-error
+      - --max-time
+      - '6'
+      - --output
+      - /dev/null
+      - --write-out
+      - '%{http_code}'
+      - https://192.168.11.243:8007/api2/json/version
+  register: cf70_outbound_https
+  changed_when: false
+  failed_when: false
+
+- name: Report route and client state, including absence of proof of protected path
+  ansible.builtin.debug:
+    msg:
+      - "CF70_OUTBOUND_HOST={{ inventory_hostname }} IP={{ ansible_host }}"
+      - "CF70_CORE_PBS_ROUTE={{ cf70_outbound_route.stdout if cf70_outbound_route.rc == 0 else 'ROUTE_UNAVAILABLE' }}"
+      - "CF70_RULES={{ cf70_outbound_rules.stdout_lines if cf70_outbound_rules.rc == 0 else 'UNAVAILABLE' }}"
+      - "CF70_ROUTE_TABLES={{ cf70_outbound_tables.stdout_lines if cf70_outbound_tables.rc == 0 else 'UNAVAILABLE' }}"
+      - "CF70_WARP_BINARY={{ cf70_warp_binary.stat.isreg | default(false) }}"
+      - "CF70_WARP_ACTIVE={{ cf70_warp_service.stdout | default('not_installed', true) }}"
+      - "CF70_WARP_ENABLED={{ cf70_warp_enabled.stdout | default('not_installed', true) }}"
+      - "CF70_WARP_STATUS={{ cf70_warp_status.stdout_lines | default([]) }}"
+      - "CF70_CLOUDFLARED_ACTIVE={{ cf70_cloudflared_service.stdout | default('inactive', true) }}"
+      - "CF70_CORE_PBS_HTTPS={{ cf70_outbound_https.stdout if cf70_outbound_https.rc == 0 else 'UNAVAILABLE' }}"
+      - "CF70_TRANSPORT_PROOF=HTTPS alone is NOT Cloudflare path proof; require actual route via WARP"

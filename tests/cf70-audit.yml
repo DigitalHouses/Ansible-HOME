@@ -26,8 +26,10 @@
     - name: Require read-only audit with no automatic installation or mutation
       ansible.builtin.assert:
         that:
-          - cf70_playbook | length == 1
+          - cf70_playbook | length == 2
           - cf70_playbook[0].hosts == 'runner'
+          - cf70_playbook[1].hosts == 'cf70_outbound_audit'
+          - cf70_playbook[1].tasks | to_json is search('cf70-home-to-core-audit.yml')
           - cf70_playbook[0].tasks | to_json is not search('method.*PUT')
           - cf70_playbook[0].tasks | to_json is not search('method.*POST')
           - cf70_playbook[0].tasks | to_json is not search('method.*DELETE')

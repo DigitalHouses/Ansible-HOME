@@ -320,3 +320,33 @@
     - name: Publish only the HOME PBS private host route through the existing PVE Tunnel
       ansible.builtin.include_tasks: ../tasks/cf70-pbs-private.yml
       when: cf70_action == 'publish_pbs_private'
+
+    - name: Enroll HOME PVE and Media VM for outbound path read-only audit
+      ansible.builtin.add_host:
+        name: "{{ item.name }}"
+        groups: cf70_outbound_audit
+        ansible_host: "{{ item.ip }}"
+        ansible_connection: ssh
+        ansible_user: "{{ item.user }}"
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          -o ConnectTimeout=7
+      loop:
+        - {name: cf70_home_pve, ip: "{{ pve.ipv4 }}", user: root}
+        - {name: cf70_home_media, ip: 192.168.11.223, user: debian}
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - cf70_action == 'audit'
+        - site_id == 'serzhan-home'
+
+- name: 70 - Read-only outbound Cloudflare route audit from both HOME source systems
+  hosts: cf70_outbound_audit
+  gather_facts: false
+  become: false
+  tasks:
+    - name: Inspect existing local routing and Cloudflare client without changes
+      ansible.builtin.import_tasks: ../tasks/cf70-home-to-core-audit.yml
