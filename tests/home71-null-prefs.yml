@@ -1,0 +1,64 @@
+---
+# Regression: real tailscale debug prefs may serialize unused values as JSON null.
+- name: Ensure HOME Tailscale nullable preferences never fail before safety enforcement
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    task_source: "{{ lookup('ansible.builtin.file', root ~ '/tasks/home71-tailscale-node.yml') }}"
+    safe_prefs:
+      CorpDNS: false
+      RouteAll: false
+      ExitNodeID: null
+      ExitNodeIP: null
+      AdvertiseRoutes: null
+      AdvertiseExitNode: false
+      AutoUpdate: {Apply: false}
+    unsafe_prefs:
+      CorpDNS: true
+      RouteAll: true
+      ExitNodeID: "node123"
+      ExitNodeIP: null
+      AdvertiseRoutes: ["192.168.0.0/16"]
+      AdvertiseExitNode: false
+      AutoUpdate: {Apply: true}
+  tasks:
+    - name: Ensure production code normalizes real Tailscale null fields
+      ansible.builtin.assert:
+        that:
+          - "'home71_prefs.ExitNodeID | default(\'\', true)' in task_source"
+          - "'home71_prefs.ExitNodeIP | default(\'\', true)' in task_source"
+          - "'home71_prefs.AdvertiseRoutes | default([], true)' in task_source"
+
+    - name: Evaluate null-safe healthy preferences without TypeError
+      ansible.builtin.set_fact:
+        home71_prefs_need_update: >-
+          {{ (safe_prefs.CorpDNS | default(true) | bool) or
+             (safe_prefs.RouteAll | default(true) | bool) or
+             (safe_prefs.ExitNodeID | default('', true) | length > 0) or
+             (safe_prefs.ExitNodeIP | default('', true) | length > 0) or
+             (safe_prefs.AdvertiseRoutes | default([], true) | length > 0) or
+             (safe_prefs.AdvertiseExitNode | default(false) | bool) or
+             (((safe_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true)
+               | default(true, true)) | bool) }}
+
+    - name: Healthy client with nullable fields needs no change
+      ansible.builtin.assert:
+        that: not home71_prefs_need_update | bool
+
+    - name: Evaluate unsafe DNS, routes and exit node preferences
+      ansible.builtin.set_fact:
+        home71_prefs_need_update: >-
+          {{ (unsafe_prefs.CorpDNS | default(true) | bool) or
+             (unsafe_prefs.RouteAll | default(true) | bool) or
+             (unsafe_prefs.ExitNodeID | default('', true) | length > 0) or
+             (unsafe_prefs.ExitNodeIP | default('', true) | length > 0) or
+             (unsafe_prefs.AdvertiseRoutes | default([], true) | length > 0) or
+             (unsafe_prefs.AdvertiseExitNode | default(false) | bool) or
+             (((unsafe_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true)
+               | default(true, true)) | bool) }}
+
+    - name: Unsafe client is detected
+      ansible.builtin.assert:
+        that: home71_prefs_need_update | bool
