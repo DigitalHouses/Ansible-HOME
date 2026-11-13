@@ -212,10 +212,12 @@
     home71_prefs_need_update: >-
       {{ (home71_prefs.CorpDNS | default(true) | bool) or
          (home71_prefs.RouteAll | default(true) | bool) or
-         (home71_prefs.ExitNodeID | default('') | length > 0) or
-         (home71_prefs.AdvertiseRoutes | default([]) | length > 0) or
+         (home71_prefs.ExitNodeID | default('', true) | length > 0) or
+         (home71_prefs.ExitNodeIP | default('', true) | length > 0) or
+         (home71_prefs.AdvertiseRoutes | default([], true) | length > 0) or
          (home71_prefs.AdvertiseExitNode | default(false) | bool) or
-         ((home71_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true) | bool) }}
+         (((home71_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true))
+           is not sameas false) }}
   when: home71_action in ['configure', 'join']
 
 - name: Apply only the necessary safe Tailscale preference changes
