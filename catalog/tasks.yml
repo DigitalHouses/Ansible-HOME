@@ -17,6 +17,11 @@ tasks:
       - {name: DH_INPUT_MQTT_USERNAME, title: "MQTT — имя пользователя (пусто — оставить прежнее)", type: "", target: env, required: false, values: []}
       - {name: DH_INPUT_MQTT_PASSWORD, title: "MQTT — пароль (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_PBS_ADMIN_PASSWORD, title: "PBS — пароль admin@pbs (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_CORE_PBS_PUSH_AUTH_ID, title: "CORE PBS — Push Token Auth ID (из CORE №50)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_CORE_PBS_PUSH_TOKEN_SECRET, title: "CORE PBS — Push Token Secret (из CORE №50)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_CORE_PBS_FINGERPRINT, title: "CORE PBS — SHA256 TLS fingerprint (из CORE)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_CORE_PBS_RESTORE_AUTH_ID, title: "CORE PBS — Restore Token Auth ID (из CORE №50)", type: "", target: env, required: false, values: []}
+      - {name: DH_INPUT_CORE_PBS_RESTORE_TOKEN_SECRET, title: "CORE PBS — Restore Token Secret (из CORE №50)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_KEY_ID, title: "Backblaze B2 — Key ID (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_B2_APPLICATION_KEY, title: "Backblaze B2 — Application Key (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_PVE_SNMP_COMMUNITY, title: "ИБП SNMP v2c — community (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
@@ -191,17 +196,19 @@ tasks:
     description: "rclone/Restic, PBS 4.2+, локальный datastore/PVE Storage, ежедневный backup, retention 30d, prune/GC/verify и токен клиента; без VM/дисков"
   - name: "34-HOME PBS для CORE"
     playbook: playbooks/media34-core-pbs.yml
-    description: "Аудит HOME PBS и отдельный read-only API Token для CORE Pull Sync; без backup jobs"
+    description: "HOME PBS Push в CORE через Tailscale и подключение PVE Restore; без изменения локальных Backup Jobs или CORE"
     survey_vars:
       - name: DH_PBS_CORE_ACTION
-        title: "HOME PBS для центрального резервирования"
+        title: "HOME PBS → CORE — действие"
         type: enum
         target: ""
         required: true
         default_value: audit
         values:
-          - {name: "Аудит PBS без изменений", value: audit}
-          - {name: "Создать/проверить read-only токен CORE", value: apply}
+          - {name: "Аудит HOME PBS и CORE Tailscale без изменений", value: audit}
+          - {name: "Создать HOME Remote + ручной Push Job (без отправки)", value: prepare}
+          - {name: "Отправить копии в CORE вручную", value: push}
+          - {name: "Подключить CORE PBS к HOME PVE для Restore", value: restore-storage}
   - name: "60-DigitalHouses Agents"
     playbook: playbooks/digitalhouses-agents.yml
     description: "После настройки медиасервера: установить, проверить или обновить PVE Agent и Plex Agent; без VM и ZFS операций"
