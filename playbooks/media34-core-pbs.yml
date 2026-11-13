@@ -122,6 +122,33 @@
       changed_when: false
       failed_when: false
 
+    - name: Read existing media VM passthrough configuration from HOME PVE
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=7
+          - "root@{{ pve.ipv4 }}"
+          - /usr/sbin/qm
+          - config
+          - "{{ pbs34_media.vmid }}"
+      register: pbs34_vm_pci_config
+      changed_when: false
+      failed_when: false
+
+    - name: Report only the VM's attached PCI controllers and virtio disks
+      ansible.builtin.debug:
+        msg:
+          - "PBS34_VM_PASSTHROUGH={{ pbs34_vm_pci_config.stdout_lines | select('match','^(hostpci|scsi|sata|virtio)[0-9]+:.*') | list if pbs34_vm_pci_config.rc == 0 else 'UNAVAILABLE' }}"
+
     - name: Summarize existing PVE backup jobs and storage targets only
       ansible.builtin.debug:
         msg:
@@ -180,6 +207,34 @@
         argv: [zpool, list, -H, -o, 'name,size,alloc,free,health']
       register: pbs34_zpool_inventory
       changed_when: false
+
+    - name: Identify backing devices of the existing media ZFS pool
+      ansible.builtin.command:
+        argv: [zpool, status, -P, "{{ pbs34_media.storage.pool_name }}"]
+      register: pbs34_pool_devices
+      changed_when: false
+
+    - name: Read actual media guest block devices with capacities and identities
+      ansible.builtin.command:
+        argv: [lsblk, -b, -o, NAME,SIZE,TYPE,FSTYPE,MODEL,SERIAL,MOUNTPOINTS]
+      register: pbs34_block_devices
+      changed_when: false
+
+    - name: Read existing ZFS pool GUID to compare with canonical media manifest
+      ansible.builtin.command:
+        argv: [zpool, get, -H, -o, value, guid, "{{ pbs34_media.storage.pool_name }}"]
+      register: pbs34_pool_guid
+      changed_when: false
+
+    - name: Compare actual pool device and identity with the approved manifest
+      ansible.builtin.debug:
+        msg:
+          - "PBS34_POOL_GUID_ACTUAL={{ pbs34_pool_guid.stdout | trim }}"
+          - "PBS34_POOL_GUID_MANIFEST={{ pbs34_media.storage.import_pool_guid }}"
+          - "PBS34_POOL_GUID_MATCH={{ pbs34_pool_guid.stdout | trim == pbs34_media.storage.import_pool_guid | string }}"
+          - "PBS34_ZPOOL_DEVICES={{ pbs34_pool_devices.stdout_lines }}"
+          - "PBS34_GUEST_BLOCK_DEVICES={{ pbs34_block_devices.stdout_lines }}"
+          - "PBS34_MANIFEST_DISK_SIZE_BYTES={{ pbs34_media.storage.disk.size_bytes }}"
 
     - name: Read the imported media pool and child filesystems
       ansible.builtin.command:
