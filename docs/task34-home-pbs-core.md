@@ -15,6 +15,16 @@
   `69:B6:A4:47:18:B2:B9:87:F3:40:2B:16:96:04:73:E9:8B:E0:5E:53:5F:DA:F2:11:EA:56:D2:ED:08:CB:54:DB`.
 - На HOME PVE `192.168.11.220` read-only аудит обнаружил Backup Job с целью `dh_media_backups`, тогда как список зарегистрированных PVE Storage — только `local` и `local-lvm`. Расхождение нуждается в разборе в локальной задаче №33; задача №34 его **не исправляет**.
 
+## Причина отсутствия datastore — подтверждена дополнительными аудитами
+
+- №34 **#92, #94, #95**: read-only `Success`, `changed=0`. PBS не содержит зарегистрированных datastore, потому что **№33 ни разу не запускалась** (0 запусков в истории HOME Semaphore, template ID 8), и ZFS dataset `serzhan-pool/pbs-serzhan` отсутствует.
+- Действующий `serzhan-pool` **ONLINE**, объём **928 GiB**, занято **140 GiB**, свободно около **788 GiB**. На нём находятся `serzhan-pool/media` (~121 GiB) и `serzhan-pool/backups` (~19,1 GiB). Существующие данные не трогали.
+- В VM2223 реально передан **Samsung SSD 850 EVO 1TB**, /dev/sdb (serial `S2PWNX0H603177N`), pool GUID `16678039401487878364`, backing `/dev/disk/by-id/wwn-0x5002538d41046527-part1`.
+- GitHub site media manifest всё ещё описывает **Hitachi HDD 4 TB**, serial `PK1331PAGH7VHS`, pool GUID `40733622006301358`, не совпадающий с рабочим пулом. Сам HOME PVE видит системный NVMe **Samsung 990 EVO 1TB**; его SATA-контроллер `0000:00:17.0` передан VM2223, в которой виден Samsung SSD 850 EVO 1TB, **Hitachi в гостевой VM не обнаружен**.
+- Успешный деплой №30 **#38 (2026-11-11)** использовал `DH_MEDIA_VM_ACTION=recreate` и `DH_MEDIA_DISK_ACTION=import`, т.е. импортировал уже существующий ZFS-пул Samsung, не создавая новый 4 TB пул.
+- На PVE остался старый enabled backup job `dh-backup-critical-daily`, расписание `03:00`, storage `dh_media_backups`; этот storage **отсутствует** в PVE (`local` и `local-lvm` только). В job указаны старые VMID, а не текущая архитектура HOME. Это не штатная локальная PBS backup job.
+- **Решение до создания datastore:** привести канонический media manifest в соответствие с фактическим диском **либо** вернуть ожидаемый 4 TB диск. После фиксации целевого физического диска — адресно создать `serzhan-pool/pbs-serzhan` и зарегистрировать PBS datastore. Только потом подключать PVE Storage и настраивать реальные резервные копии через профильную №33. Запускать полную №33 с устаревшим manifest или менять существующий backup job без отдельной проверки недопустимо.
+
 ## Что подготовлено, но не применено
 
 Новый playbook `playbooks/media34-core-pbs.yml` и задачи `tasks/media34-core-pull-token.yml` реализуют:
