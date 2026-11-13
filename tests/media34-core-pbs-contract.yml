@@ -33,6 +33,11 @@
       ansible.builtin.assert:
         that:
           - prepare | to_json is search('api2/json/config/remote')
+          - prepare | to_json is search('ansible.builtin.env')
+          - prepare | to_json is search('DH_CORE_PBS_PUSH_AUTH_ID')
+          - prepare | to_json is search('DH_CORE_PBS_FINGERPRINT')
+          - restore | to_json is search('ansible.builtin.env')
+          - restore | to_json is search('DH_CORE_PBS_RESTORE_AUTH_ID')
           - prepare | to_json is search('api2/json/config/sync')
           - prepare | to_json is search('PBSAuthCookie')
           - prepare | to_json is search('sync-direction')
