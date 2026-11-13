@@ -38,6 +38,15 @@
   changed_when: false
   failed_when: false
 
+- name: Reject any existing default route through Tailscale or Quad100 as host DNS
+  ansible.builtin.assert:
+    that:
+      - home71_default_interface != 'tailscale0'
+      - "'100.100.100.100' not in (home71_dns_before.content | b64decode)"
+      - home71_resolved_before.rc != 0 or '100.100.100.100' not in home71_resolved_before.stdout
+    fail_msg: HOME71_UNSAFE_EXISTING_DNS_OR_DEFAULT_ROUTE
+  # Strict preflight, before even an install/update. We never silently inherit a DNS hijack.
+
 - name: Inspect Debian release without changing installed packages
   ansible.builtin.slurp:
     src: /etc/os-release
@@ -206,7 +215,7 @@
          (home71_prefs.ExitNodeID | default('') | length > 0) or
          (home71_prefs.AdvertiseRoutes | default([]) | length > 0) or
          (home71_prefs.AdvertiseExitNode | default(false) | bool) or
-         (home71_prefs.get('AutoUpdate', {}).get('Apply', true) | bool) }}
+         ((home71_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true) | bool) }}
   when: home71_action in ['configure', 'join']
 
 - name: Apply only the necessary safe Tailscale preference changes
@@ -223,6 +232,49 @@
   when:
     - home71_action in ['configure', 'join']
     - home71_prefs_need_update | bool
+
+- name: Read effective Tailscale profile after any requested operation
+  ansible.builtin.command:
+    argv: [tailscale, debug, prefs]
+  register: home71_effective_prefs_raw
+  changed_when: false
+  failed_when: false
+  when:
+    - home71_pkg_after.rc == 0
+    - home71_state_joined.rc | default(1) == 0
+    - (home71_state_joined.stdout | default('{}', true) | from_json).get('BackendState', '') == 'Running'
+
+- name: Require observable effective Tailscale preferences for a connected client
+  ansible.builtin.assert:
+    that:
+      - home71_effective_prefs_raw.rc == 0
+      - home71_effective_prefs_raw.stdout | trim | length > 0
+    fail_msg: HOME71_TAILSCALE_PREFERENCES_UNREADABLE
+  when:
+    - home71_pkg_after.rc == 0
+    - home71_state_joined.rc | default(1) == 0
+    - (home71_state_joined.stdout | default('{}', true) | from_json).get('BackendState', '') == 'Running'
+
+- name: Parse effective Tailscale preferences of the connected client
+  ansible.builtin.set_fact:
+    home71_effective_prefs: "{{ home71_effective_prefs_raw.stdout | from_json }}"
+  when:
+    - home71_pkg_after.rc == 0
+    - home71_state_joined.rc | default(1) == 0
+    - (home71_state_joined.stdout | default('{}', true) | from_json).get('BackendState', '') == 'Running'
+    - home71_effective_prefs_raw.rc == 0
+
+- name: Forbid Tailscale DNS, accepted subnet routes or exit nodes even on pre-existing clients
+  ansible.builtin.assert:
+    that:
+      - not home71_effective_prefs.CorpDNS | default(true) | bool
+      - not home71_effective_prefs.RouteAll | default(true) | bool
+      - home71_effective_prefs.ExitNodeID | default('', true) | length == 0
+      - home71_effective_prefs.ExitNodeIP | default('', true) | length == 0
+      - home71_effective_prefs.AdvertiseRoutes | default([], true) | length == 0
+      - not home71_effective_prefs.AdvertiseExitNode | default(false) | bool
+    fail_msg: HOME71_UNSAFE_TAILSCALE_PREFERENCES_CONFIGURE_REQUIRED
+  when: home71_effective_prefs is defined
 
 - name: Verify original default IPv4 route remains unchanged
   ansible.builtin.command:
@@ -280,5 +332,8 @@
       - "HOME71_PACKAGE={{ home71_pkg_after.stdout if home71_pkg_after.rc == 0 else 'NOT_INSTALLED' }}"
       - "HOME71_TAILNET={{ (home71_state_joined.stdout | from_json).BackendState if home71_pkg_after.rc == 0 and home71_state_joined.rc | default(1) == 0 else 'NOT_CONNECTED' }}"
       - "HOME71_TAILNET_IP={{ home71_tailnet_ip.stdout | default('NOT_ASSIGNED', true) | trim }}"
+      - "HOME71_ACCEPT_DNS={{ home71_effective_prefs.CorpDNS | default('NOT_CONNECTED') if home71_effective_prefs is defined else 'NOT_CONNECTED' }}"
+      - "HOME71_ACCEPT_ROUTES={{ home71_effective_prefs.RouteAll | default('NOT_CONNECTED') if home71_effective_prefs is defined else 'NOT_CONNECTED' }}"
+      - "HOME71_EXIT_NODE={{ home71_effective_prefs.ExitNodeID | default('NONE', true) if home71_effective_prefs is defined else 'NOT_CONNECTED' }}"
       - "HOME71_CORE_PBS_8007={{ 'REACHABLE' if (home71_core_tcp is defined and home71_core_tcp.state | default('') == 'started' and 'msg' not in home71_core_tcp) else 'NOT_VERIFIED' }}"
       - HOME71_DEFAULT_ROUTE_AND_DNS=UNCHANGED
