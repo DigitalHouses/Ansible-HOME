@@ -33,7 +33,7 @@ CORE уже принят: `dh-core-pve` = `100.64.243.13`, `dh-core-pbs` = `100.
 
 Общий профиль: `accept-dns=false`, `accept-routes=false`, пустой exit node и advertised routes, `advertise-exit-node=false`, `auto-update=false`. Не используем subnet router, exit node, Tailscale SSH без отдельного решения. Уникальные Tailscale IP `100.64.0.0/10` разрешены; не удаляем локальный доступ в tailnet.
 
-Перед и после любого действия проверяем `ip -4 route get 1.1.1.1`, `/etc/resolv.conf` и DNS на default интерфейсе через `resolvectl`, если доступен. На PVE и PBS используется уже закреплённый SSH Semaphore: для PBS — `media80_known_hosts`. При изменении LAN DNS/default route — явный failed, массовое применение останавливается. Реальные локальные Backup Jobs/PBS, Cloudflare Tunnel и HA не изменяются.
+Перед и после любого действия проверяем `ip -4 route get 1.1.1.1`, `/etc/resolv.conf` и DNS на default интерфейсе через `resolvectl`, если доступен. Перед любым действием явная защитная проверка запрещает `tailscale0` как default route и `100.100.100.100` как системный DNS. Для любого уже подключённого узла, включая `audit`, также проверяется фактический профиль `tailscale debug prefs`: `CorpDNS=false`, `RouteAll=false`, без exit node и объявленных subnet routes. Нарушение = `failed`, а не ложный `success`. Это дополняет исходную проверку CORE №71 и помогает обнаруживать небезопасные настройки, существовавшие ещё до запуска задачи. На PVE и PBS используется уже закреплённый SSH Semaphore: для PBS — `media80_known_hosts`. При изменении LAN DNS/default route — явный failed, массовое применение останавливается. Реальные локальные Backup Jobs/PBS, Cloudflare Tunnel и HA не изменяются.
 
 ## Приёмка на serzhan-home
 
