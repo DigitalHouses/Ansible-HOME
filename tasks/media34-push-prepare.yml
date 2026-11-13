@@ -3,21 +3,27 @@
 # Remote token must be provisioned independently by CORE №50, then saved in HOME №05.
 # Native Semaphore Variable Group exposes nonsecret identity and protected
 # secrets as Ansible variables. Report only statuses, NEVER values or lengths.
+- name: Resolve nonsecret CORE fields from Semaphore native environment
+  ansible.builtin.set_fact:
+    home34_push_auth_id: "{{ DH_CORE_PBS_PUSH_AUTH_ID | default(lookup('ansible.builtin.env', 'DH_CORE_PBS_PUSH_AUTH_ID'), true) | trim }}"
+    home34_pinned_fingerprint: "{{ DH_CORE_PBS_FINGERPRINT | default(lookup('ansible.builtin.env', 'DH_CORE_PBS_FINGERPRINT'), true) | trim | lower }}"
+  no_log: true
+
 - name: Evaluate each HOME34 credential independently without exposing its value
   ansible.builtin.set_fact:
     home34_push_auth_status: >-
-      {{ 'MISSING' if (DH_CORE_PBS_PUSH_AUTH_ID | default('', true) | trim | length) == 0
-         else ('OK' if (DH_CORE_PBS_PUSH_AUTH_ID | trim) is match('^[A-Za-z0-9_.-]+@(pbs|pam)![A-Za-z0-9_.-]+$')
+      {{ 'MISSING' if (home34_push_auth_id | default('', true) | trim | length) == 0
+         else ('OK' if (home34_push_auth_id | trim) is match('^[A-Za-z0-9_.-]+@(pbs|pam)![A-Za-z0-9_.-]+$')
                else 'INVALID') }}
     home34_push_secret_status: >-
       {{ 'MISSING' if (DH_CORE_PBS_PUSH_TOKEN_SECRET | default('', true) | length) == 0
          else ('OK' if (DH_CORE_PBS_PUSH_TOKEN_SECRET | length) >= 24 else 'INVALID') }}
     home34_fingerprint_status: >-
-      {{ 'MISSING' if (DH_CORE_PBS_FINGERPRINT | default('', true) | trim | length) == 0
+      {{ 'MISSING' if (home34_pinned_fingerprint | default('', true) | trim | length) == 0
          else ('OK' if
-           ((DH_CORE_PBS_FINGERPRINT | trim | lower)
+           ((home34_pinned_fingerprint | trim | lower)
              is match('^([a-f0-9]{2}:){31}[a-f0-9]{2}$'))
-           and ((DH_CORE_PBS_FINGERPRINT | trim | lower) == home34_observed_fingerprint)
+           and ((home34_pinned_fingerprint | trim | lower) == home34_observed_fingerprint)
            else 'INVALID') }}
     home34_root_password_status: >-
       {{ 'MISSING' if (DH_MEDIA_ROOT_PASSWORD | default('', true) | length) == 0 else 'OK' }}
@@ -57,7 +63,7 @@
   ansible.builtin.assert:
     that: >-
       home34_existing_remote | length == 0 or
-      home34_existing_remote[0]['auth-id'] == DH_CORE_PBS_PUSH_AUTH_ID
+      home34_existing_remote[0]['auth-id'] == home34_push_auth_id
     fail_msg: HOME34_REMOTE_AUTH_ID_CONFLICT
 
 - name: Obtain one short-lived PBS admin ticket over localhost HTTPS
@@ -89,7 +95,7 @@
     body_format: form-urlencoded
     body:
       name: "{{ home34_remote }}"
-      "auth-id": "{{ DH_CORE_PBS_PUSH_AUTH_ID }}"
+      "auth-id": "{{ home34_push_auth_id }}"
       host: "{{ home34_core_ip }}"
       port: "8007"
       fingerprint: "{{ home34_observed_fingerprint }}"
