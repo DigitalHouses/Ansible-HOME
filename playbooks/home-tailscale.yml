@@ -1,0 +1,124 @@
+---
+# HOME 71: maintain Tailscale on the existing PVE and HOME PBS endpoint.
+# No HOME Assistant changes, no subnet routing, no Cloudflare/WARP mutations.
+- name: "71 | Resolve HOME PVE and PBS targets"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files:
+    - /etc/digitalhouses/pve.yml
+  vars:
+    home71_site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    home71_profile: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-profile', errors='ignore') | default('home', true) | trim }}"
+    home71_action: "{{ DH_HOME71_ACTION | default('audit', true) }}"
+    home71_target: "{{ DH_HOME71_TARGET | default('both', true) }}"
+    home71_auth_key: "{{ DH_TAILSCALE_AUTH_KEY | default('', true) }}"
+  tasks:
+    - name: Validate HOME identity and explicitly selected operation
+      ansible.builtin.assert:
+        that:
+          - home71_profile == 'home'
+          - home71_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
+          - home71_action in ['audit', 'install', 'configure', 'join', 'update']
+          - home71_target in ['pve', 'pbs', 'both']
+          - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
+          - pve.node | length > 0
+        fail_msg: HOME71_INVALID_SITE_OR_ACTION
+
+    - name: Register only the existing pinned HOME PVE
+      ansible.builtin.add_host:
+        name: home71_pve
+        groups: home71_nodes
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=10
+        home71_expected_hostname: "{{ pve.node }}"
+        home71_node_kind: pve
+        home71_action: "{{ home71_action }}"
+        home71_auth_key: "{{ home71_auth_key if home71_action == 'join' else '' }}"
+      when: home71_target in ['pve', 'both']
+      no_log: true
+
+    - name: Require existing GitHub site inventory credential for PBS target
+      ansible.builtin.assert:
+        that: DH_GITHUB_PROVISION_TOKEN | default('', true) | length > 0
+        fail_msg: HOME71_SITE_INVENTORY_CREDENTIAL_REQUIRED
+      when: home71_target in ['pbs', 'both']
+      no_log: true
+
+    - name: Read the approved HOME media/PBS inventory
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/DigitalHouses/site-{{ home71_site_id }}/contents/inventories/{{ home71_site_id }}/media_vm.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ DH_GITHUB_PROVISION_TOKEN }}"
+          Accept: application/vnd.github+json
+        use_proxy: false
+        status_code: 200
+      register: home71_media_response
+      changed_when: false
+      no_log: true
+      when: home71_target in ['pbs', 'both']
+
+    - name: Decode the existing PBS-hosting media guest specification
+      ansible.builtin.set_fact:
+        home71_media: "{{ (home71_media_response.json.content | b64decode | from_yaml).media_vm }}"
+      when: home71_target in ['pbs', 'both']
+      no_log: true
+
+    - name: Verify PBS guest identity and address before any connection
+      ansible.builtin.assert:
+        that:
+          - home71_media.vmid | int > 0
+          - home71_media.name | length > 0
+          - home71_media.network.ipv4 is match('^[0-9]+(\\.[0-9]+){3}/[0-9]+$')
+        fail_msg: HOME71_PBS_GUEST_INVENTORY_INVALID
+      when: home71_target in ['pbs', 'both']
+
+    - name: Check that trusted media/PBS SSH host pin already exists
+      ansible.builtin.stat:
+        path: /var/lib/semaphore/.ssh/media80_known_hosts
+      register: home71_media_pin
+      when: home71_target in ['pbs', 'both']
+
+    - name: Require accepted pinned SSH identity for the PBS guest
+      ansible.builtin.assert:
+        that:
+          - home71_media_pin.stat.isreg | default(false)
+          - home71_media_pin.stat.mode == '0600'
+        fail_msg: HOME71_PBS_PINNED_SSH_UNAVAILABLE
+      when: home71_target in ['pbs', 'both']
+
+    - name: Register only the approved HOME PBS guest
+      ansible.builtin.add_host:
+        name: home71_pbs
+        groups: home71_nodes
+        ansible_host: "{{ home71_media.network.ipv4.split('/')[0] }}"
+        ansible_user: debian
+        ansible_become: true
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/media80_known_hosts -o ConnectTimeout=10
+        home71_expected_hostname: "{{ home71_media.name }}"
+        home71_node_kind: pbs
+        home71_action: "{{ home71_action }}"
+        home71_auth_key: "{{ home71_auth_key if home71_action == 'join' else '' }}"
+      when: home71_target in ['pbs', 'both']
+      no_log: true
+
+- name: "71 | Audit and maintain HOME Tailscale, PVE first then PBS"
+  hosts: home71_nodes
+  order: inventory
+  serial: 1
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Audit and maintain only the selected existing node
+      ansible.builtin.include_tasks: ../tasks/home71-tailscale-node.yml
