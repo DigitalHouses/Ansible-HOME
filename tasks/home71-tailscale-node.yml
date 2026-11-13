@@ -1,0 +1,284 @@
+---
+# Shared HOME PVE/PBS Tailscale actions. Executed sequentially, one existing host at a time.
+- name: Verify current host is the approved PVE or PBS guest
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: home71_actual_hostname
+  changed_when: false
+
+- name: Stop before changing the wrong HOME host
+  ansible.builtin.assert:
+    that: home71_actual_hostname.stdout | trim == home71_expected_hostname
+    fail_msg: HOME71_HOST_IDENTITY_MISMATCH
+
+- name: Read original default IPv4 route
+  ansible.builtin.command:
+    argv: [ip, -4, route, get, '1.1.1.1']
+  register: home71_route_before
+  changed_when: false
+
+- name: Record default route interface
+  ansible.builtin.set_fact:
+    home71_default_interface: "{{ (home71_route_before.stdout | regex_findall('\\bdev\\s+([^ ]+)') | first) | default('') }}"
+
+- name: Require default interface before Tailscale operations
+  ansible.builtin.assert:
+    that: home71_default_interface | length > 0
+    fail_msg: HOME71_DEFAULT_INTERFACE_UNAVAILABLE
+
+- name: Read original resolver configuration
+  ansible.builtin.slurp:
+    src: /etc/resolv.conf
+  register: home71_dns_before
+
+- name: Read original interface DNS if resolved is in use
+  ansible.builtin.command:
+    argv: [resolvectl, dns, "{{ home71_default_interface }}"]
+  register: home71_resolved_before
+  changed_when: false
+  failed_when: false
+
+- name: Inspect Debian release without changing installed packages
+  ansible.builtin.slurp:
+    src: /etc/os-release
+  register: home71_os_release
+
+- name: Determine supported official stable repository codename
+  ansible.builtin.set_fact:
+    home71_codename: "{{ ((home71_os_release.content | b64decode) | regex_findall('(?m)^VERSION_CODENAME=(bookworm|trixie)$') | first) | default('') }}"
+
+- name: Refuse unknown Debian release before package management
+  ansible.builtin.assert:
+    that: home71_codename in ['bookworm', 'trixie']
+    fail_msg: HOME71_UNSUPPORTED_DEBIAN_RELEASE
+  when: home71_action in ['install', 'update']
+
+- name: Audit installed Tailscale package
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Version}', tailscale]
+  register: home71_pkg_before
+  changed_when: false
+  failed_when: false
+
+- name: Refuse configure or join before Tailscale installation
+  ansible.builtin.assert:
+    that: home71_pkg_before.rc == 0
+    fail_msg: HOME71_INSTALL_TAILSCALE_FIRST
+  when: home71_action in ['configure', 'join']
+
+- name: Install official stable Tailscale repository signing key
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/debian/{{ home71_codename }}.noarmor.gpg"
+    dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+    mode: '0644'
+  when: home71_action == 'install' or (home71_action == 'update' and home71_pkg_before.rc == 0)
+
+- name: Install official stable Tailscale APT source
+  ansible.builtin.get_url:
+    url: "https://pkgs.tailscale.com/stable/debian/{{ home71_codename }}.tailscale-keyring.list"
+    dest: /etc/apt/sources.list.d/tailscale.list
+    mode: '0644'
+  when: home71_action == 'install' or (home71_action == 'update' and home71_pkg_before.rc == 0)
+
+- name: Install only the selected node's Tailscale package
+  ansible.builtin.apt:
+    name: tailscale
+    state: present
+    update_cache: true
+  when: home71_action == 'install'
+
+- name: Upgrade only an already installed Tailscale package
+  ansible.builtin.apt:
+    name: tailscale
+    state: latest
+    only_upgrade: true
+    update_cache: true
+  when:
+    - home71_action == 'update'
+    - home71_pkg_before.rc == 0
+
+- name: Keep Tailscale daemon enabled after a package action
+  ansible.builtin.systemd:
+    name: tailscaled
+    state: started
+    enabled: true
+  when: home71_action == 'install' or (home71_action == 'update' and home71_pkg_before.rc == 0)
+
+- name: Audit final package version
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Version}', tailscale]
+  register: home71_pkg_after
+  changed_when: false
+  failed_when: false
+
+- name: Read tailnet state before optional authorization
+  ansible.builtin.command:
+    argv: [tailscale, status, --json]
+  register: home71_state_before
+  changed_when: false
+  failed_when: false
+  when: home71_pkg_after.rc == 0
+
+- name: Determine whether this node already belongs to the tailnet
+  ansible.builtin.set_fact:
+    home71_running_before: >-
+      {{ home71_pkg_after.rc == 0 and
+         home71_state_before.rc | default(1) == 0 and
+         (home71_state_before.stdout | default('{}', true) | from_json).get('BackendState', '') == 'Running' }}
+
+- name: Reject configure on a client not yet joined
+  ansible.builtin.assert:
+    that: home71_running_before | bool
+    fail_msg: HOME71_TAILSCALE_JOIN_REQUIRED
+  when: home71_action == 'configure'
+
+- name: Require existing Semaphore secret only for a fresh Tailscale join
+  ansible.builtin.assert:
+    that: home71_auth_key | length > 0
+    fail_msg: HOME71_TAILSCALE_AUTH_KEY_MISSING_IN_TASK05
+  when: home71_action == 'join' and not home71_running_before | bool
+  no_log: true
+
+- name: Authorize a new HOME tailnet device without exposing auth key in argv
+  when: home71_action == 'join' and not home71_running_before | bool
+  block:
+    - name: Create temporary root-only Tailscale auth-key file
+      ansible.builtin.copy:
+        dest: /run/dh-home71-tailscale-auth-key
+        content: "{{ home71_auth_key }}"
+        owner: root
+        group: root
+        mode: '0600'
+      no_log: true
+
+    - name: Join existing tailnet without taking over LAN DNS or default route
+      ansible.builtin.command:
+        argv:
+          - tailscale
+          - up
+          - --auth-key=file:/run/dh-home71-tailscale-auth-key
+          - --accept-dns=false
+          - --accept-routes=false
+          - --exit-node=
+          - --advertise-exit-node=false
+          - --advertise-routes=
+      no_log: true
+  always:
+    - name: Remove temporary auth-key file, including after failed enrollment
+      ansible.builtin.file:
+        path: /run/dh-home71-tailscale-auth-key
+        state: absent
+      no_log: true
+
+- name: Read tailnet state after optional authorization
+  ansible.builtin.command:
+    argv: [tailscale, status, --json]
+  register: home71_state_joined
+  changed_when: false
+  failed_when: false
+  when: home71_pkg_after.rc == 0
+
+- name: Verify a requested join did not leave a disconnected device
+  ansible.builtin.assert:
+    that:
+      - home71_state_joined.rc == 0
+      - (home71_state_joined.stdout | from_json).BackendState == 'Running'
+    fail_msg: HOME71_JOIN_NOT_RUNNING
+  when: home71_action == 'join'
+
+- name: Read Tailscale preference JSON for idempotent configuration
+  ansible.builtin.command:
+    argv: [tailscale, debug, prefs]
+  register: home71_prefs_raw
+  changed_when: false
+  when: home71_action in ['configure', 'join']
+
+- name: Parse the existing Tailscale preferences
+  ansible.builtin.set_fact:
+    home71_prefs: "{{ home71_prefs_raw.stdout | from_json }}"
+  when: home71_action in ['configure', 'join']
+
+- name: Check for preferences incompatible with HOME's safe transport standard
+  ansible.builtin.set_fact:
+    home71_prefs_need_update: >-
+      {{ (home71_prefs.CorpDNS | default(true) | bool) or
+         (home71_prefs.RouteAll | default(true) | bool) or
+         (home71_prefs.ExitNodeID | default('') | length > 0) or
+         (home71_prefs.AdvertiseRoutes | default([]) | length > 0) or
+         (home71_prefs.AdvertiseExitNode | default(false) | bool) or
+         (home71_prefs.get('AutoUpdate', {}).get('Apply', true) | bool) }}
+  when: home71_action in ['configure', 'join']
+
+- name: Apply only the necessary safe Tailscale preference changes
+  ansible.builtin.command:
+    argv:
+      - tailscale
+      - set
+      - --accept-dns=false
+      - --accept-routes=false
+      - --exit-node=
+      - --advertise-routes=
+      - --advertise-exit-node=false
+      - --auto-update=false
+  when:
+    - home71_action in ['configure', 'join']
+    - home71_prefs_need_update | bool
+
+- name: Verify original default IPv4 route remains unchanged
+  ansible.builtin.command:
+    argv: [ip, -4, route, get, '1.1.1.1']
+  register: home71_route_after
+  changed_when: false
+
+- name: Verify resolver file remains unchanged
+  ansible.builtin.slurp:
+    src: /etc/resolv.conf
+  register: home71_dns_after
+
+- name: Check interface DNS after possible Tailscale changes
+  ansible.builtin.command:
+    argv: [resolvectl, dns, "{{ home71_default_interface }}"]
+  register: home71_resolved_after
+  changed_when: false
+  failed_when: false
+
+- name: Stop on unauthorized changes to LAN DNS or default route
+  ansible.builtin.assert:
+    that:
+      - home71_route_after.stdout == home71_route_before.stdout
+      - home71_dns_after.content == home71_dns_before.content
+      - home71_resolved_before.rc != 0 or (home71_resolved_after.rc == 0 and home71_resolved_after.stdout == home71_resolved_before.stdout)
+    fail_msg: HOME71_LOCAL_NETWORK_CHANGED_STOP_FOR_REVIEW
+
+- name: Audit assigned tailnet IPv4 address
+  ansible.builtin.command:
+    argv: [tailscale, ip, -4]
+  register: home71_tailnet_ip
+  changed_when: false
+  failed_when: false
+  when: home71_pkg_after.rc == 0
+
+- name: Test TCP access over tailnet to CORE PBS without using LAN subnet
+  ansible.builtin.wait_for:
+    host: 100.97.126.67
+    port: 8007
+    connect_timeout: 3
+    timeout: 7
+    state: started
+  register: home71_core_tcp
+  failed_when: false
+  when:
+    - home71_pkg_after.rc == 0
+    - home71_state_joined.rc | default(1) == 0
+    - (home71_state_joined.stdout | default('{}', true) | from_json).get('BackendState', '') == 'Running'
+
+- name: Report HOME client state and CORE PBS reachability without credentials
+  ansible.builtin.debug:
+    msg:
+      - "HOME71_HOST={{ home71_node_kind }} {{ home71_actual_hostname.stdout | trim }}"
+      - "HOME71_ACTION={{ home71_action }}"
+      - "HOME71_PACKAGE={{ home71_pkg_after.stdout if home71_pkg_after.rc == 0 else 'NOT_INSTALLED' }}"
+      - "HOME71_TAILNET={{ (home71_state_joined.stdout | from_json).BackendState if home71_pkg_after.rc == 0 and home71_state_joined.rc | default(1) == 0 else 'NOT_CONNECTED' }}"
+      - "HOME71_TAILNET_IP={{ home71_tailnet_ip.stdout | default('NOT_ASSIGNED', true) | trim }}"
+      - "HOME71_CORE_PBS_8007={{ 'REACHABLE' if home71_core_tcp is defined and home71_core_tcp is succeeded and not home71_core_tcp.skipped | default(false) else 'NOT_VERIFIED' }}"
+      - HOME71_DEFAULT_ROUTE_AND_DNS=UNCHANGED
