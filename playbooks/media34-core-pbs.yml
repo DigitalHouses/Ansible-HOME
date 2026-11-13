@@ -292,7 +292,7 @@
 
     - name: Check whether the intended PBS ZFS dataset exists without creating it
       ansible.builtin.command:
-        argv: [zfs, list, -H, -o, name,mountpoint, "{{ pbs34_media.storage.pool_name }}/{{ pbs34_store }}"]
+        argv: [zfs, list, -H, -o, 'name,mountpoint', "{{ pbs34_media.storage.pool_name }}/{{ pbs34_store }}"]
       register: pbs34_zfs_source
       changed_when: false
       failed_when: false
@@ -389,7 +389,7 @@
           - "PBS34_ZFS_SOURCE_PRESENT={{ pbs34_zfs_source.rc == 0 }} DATASET={{ pbs34_zfs_source.stdout | trim if pbs34_zfs_source.rc == 0 else 'NOT_FOUND' }}"
           - "PBS34_SOURCE={{ pbs34_store }} REGISTERED={{ pbs34_store_matches | length == 1 }}"
           - "PBS34_SOURCE_PATH={{ (pbs34_store_details.stdout | from_json).path if pbs34_store_matches | length == 1 else 'NOT_REGISTERED' }}"
-          - "PBS34_CORE_SYNC_READY={{ pbs34_store_matches | length == 1 }} (no registered datastore means no namespaces or backup groups available)"
+          - "PBS34_CORE_SOURCE_READY={{ pbs34_store_matches | length == 1 and pbs34_zfs_source.rc == 0 }}"
           - "PBS34_USERS={{ (pbs34_users_raw.stdout | from_json) | map(attribute='userid') | list }}"
           - "PBS34_ROOT_TOKEN_IDS={{ (pbs34_tokens_raw.stdout | from_json) | map(attribute='tokenid') | list }}"
           - "PBS34_ACL_COUNT={{ (pbs34_acl_raw.stdout | from_json) | length }}"
