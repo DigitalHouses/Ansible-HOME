@@ -43,8 +43,8 @@
              (safe_prefs.ExitNodeIP | default('', true) | length > 0) or
              (safe_prefs.AdvertiseRoutes | default([], true) | length > 0) or
              (safe_prefs.AdvertiseExitNode | default(false) | bool) or
-             (((safe_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true)
-               | default(true, true)) | bool) }}
+             (((safe_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true))
+               is not sameas false) }}
 
     - name: Healthy client with nullable fields needs no change
       ansible.builtin.assert:
@@ -59,8 +59,8 @@
              (unsafe_prefs.ExitNodeIP | default('', true) | length > 0) or
              (unsafe_prefs.AdvertiseRoutes | default([], true) | length > 0) or
              (unsafe_prefs.AdvertiseExitNode | default(false) | bool) or
-             (((unsafe_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true)
-               | default(true, true)) | bool) }}
+             (((unsafe_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true))
+               is not sameas false) }}
 
     - name: Unsafe client is detected
       ansible.builtin.assert:
