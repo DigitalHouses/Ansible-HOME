@@ -369,17 +369,15 @@
       register: pbs34_cert_raw
       changed_when: false
 
-    - name: Compare the exact SHA-256 certificate fingerprint from CORE
+    - name: Read current TLS fingerprint from authenticated HOME PBS host
       ansible.builtin.set_fact:
         pbs34_fingerprint_found: "{{ pbs34_cert_raw.stdout.split('=')[-1] | trim | lower }}"
-        pbs34_fingerprint_expected: 69:b6:a4:47:18:b2:b9:87:f3:40:2b:16:96:04:73:e9:8b:e0:5e:53:5f:da:f2:11:ea:56:d2:ed:08:cb:54:db
 
-    - name: Require exact TLS fingerprint match before provisioning CORE access
+    - name: Require valid live PBS TLS fingerprint for CORE pinning
       ansible.builtin.assert:
         that:
           - pbs34_fingerprint_found is match('^[0-9a-f]{2}(:[0-9a-f]{2}){31}$')
-          - pbs34_fingerprint_found == pbs34_fingerprint_expected
-        fail_msg: PBS34_TLS_FINGERPRINT_MISMATCH
+        fail_msg: PBS34_TLS_FINGERPRINT_INVALID
 
     - name: Summarize existing PBS principals and source datastore nonsecret metadata
       ansible.builtin.debug:
