@@ -39,10 +39,29 @@
   ansible.builtin.assert:
     that:
       - pbs34_core_existing | length <= 1
-      - (pbs34_core_existing | length == 1) == (pbs34_core_file.stat.exists | bool)
       - pbs34_core_acl_existing | rejectattr('path','equalto',pbs34_core_acl_path) | list | length == 0
       - pbs34_core_acl_existing | rejectattr('roleid','in',['DatastoreReader','DatastoreAudit']) | list | length == 0
+      - >-
+        (pbs34_core_existing | length == 0 and not pbs34_core_file.stat.exists) or
+        (pbs34_core_existing | length == 1 and pbs34_core_file.stat.exists) or
+        (pbs34_core_existing | length == 1 and not pbs34_core_file.stat.exists and
+         pbs34_core_acl_existing | length == 0)
     fail_msg: PBS34_CORE_EXISTING_TOKEN_OR_ACL_CONFLICT
+  no_log: true
+
+- name: Recover only the incomplete CORE token created without a saved secret
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, user, delete-token, root@pam, core-pull]
+  when:
+    - pbs34_core_existing | length == 1
+    - not pbs34_core_file.stat.exists
+    - pbs34_core_acl_existing | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Determine whether a fresh CORE secret is required
+  ansible.builtin.set_fact:
+    pbs34_core_create_required: "{{ not pbs34_core_file.stat.exists }}"
   no_log: true
 
 - name: Create only one dedicated HOME PBS token for CORE
@@ -57,15 +76,25 @@
       - "Read-only CORE PBS pull of {{ pbs34_store }}"
   register: pbs34_core_generated
   changed_when: true
-  when: pbs34_core_existing | length == 0
+  when: pbs34_core_create_required | bool
   no_log: true
+
+- name: Report only the output channel carrying the token response
+  ansible.builtin.debug:
+    msg:
+      - "PBS34_CORE_GENERATE_STDOUT_HAS_JSON={{ 'tokenid' in (pbs34_core_generated.stdout | default('')) }}"
+      - "PBS34_CORE_GENERATE_STDERR_HAS_JSON={{ 'tokenid' in (pbs34_core_generated.stderr | default('')) }}"
+      - "PBS34_CORE_GENERATE_STDOUT_LENGTH={{ pbs34_core_generated.stdout | default('') | length }}"
+      - "PBS34_CORE_GENERATE_STDERR_LENGTH={{ pbs34_core_generated.stderr | default('') | length }}"
+  when: pbs34_core_create_required | bool
 
 - name: Parse the one-time token without printing it
   ansible.builtin.set_fact:
     pbs34_core_generated_json: >-
-      {{ pbs34_core_generated.stdout |
-         regex_search('(?s)\\{.*\\}') | from_json }}
-  when: pbs34_core_existing | length == 0
+      {{ (((pbs34_core_generated.stdout | default('')) ~ '\n' ~
+            (pbs34_core_generated.stderr | default('')))
+           | regex_findall('(?s)[{].*[}]') | first | default('{}')) | from_json }}
+  when: pbs34_core_create_required | bool
   no_log: true
 
 - name: Require a valid new token identity and secret
@@ -74,7 +103,7 @@
       - pbs34_core_generated_json.tokenid == pbs34_core_token_id
       - pbs34_core_generated_json.value | length > 30
     fail_msg: PBS34_CORE_TOKEN_RESPONSE_INVALID
-  when: pbs34_core_existing | length == 0
+  when: pbs34_core_create_required | bool
   no_log: true
 
 - name: Persist one-time token secret on the HOME media VM root-only
@@ -84,7 +113,7 @@
     owner: root
     group: root
     mode: '0600'
-  when: pbs34_core_existing | length == 0
+  when: pbs34_core_create_required | bool
   no_log: true
 
 - name: Grant only read and audit on the source datastore
