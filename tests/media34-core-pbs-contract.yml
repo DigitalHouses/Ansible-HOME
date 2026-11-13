@@ -1,32 +1,47 @@
 ---
-- name: Verify HOME PBS CORE reader contract is explicitly opt-in
+- name: Verify HOME PBS native Push and restore-only contract
   hosts: localhost
   connection: local
   gather_facts: false
   vars:
     root: "{{ playbook_dir | dirname }}"
-    cat: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
+    catalog: "{{ lookup('ansible.builtin.file', root ~ '/catalog/tasks.yml') | from_yaml }}"
     pb: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media34-core-pbs.yml') | from_yaml }}"
-    token_tasks: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-core-pull-token.yml') | from_yaml }}"
-    core_entries: "{{ cat.tasks | selectattr('name','equalto','34-HOME PBS для CORE') | list }}"
+    prepare: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-push-prepare.yml') | from_yaml }}"
+    restore: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-restore-storage.yml') | from_yaml }}"
+    creds: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/obtain-site-credentials.yml') | from_yaml }}"
+    entries: "{{ catalog.tasks | selectattr('name', 'equalto', '34-HOME PBS для CORE') | list }}"
+    entry05: "{{ catalog.tasks | selectattr('name', 'equalto', '05-Ввести и проверить credentials') | list }}"
   tasks:
-    - name: Parse token tasks without executing them
-      ansible.builtin.import_tasks: ../tasks/media34-core-pull-token.yml
-      when: false
-
-    - name: Verify audit default and sole dedicated CORE token path
+    - name: Require safe default action and no legacy CORE Pull token action
       ansible.builtin.assert:
         that:
-          - core_entries | length == 1
-          - core_entries[0].survey_vars[0].default_value == 'audit'
-          - core_entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','apply']
-          - pb | length == 4
-          - token_tasks | to_json is search('root@pam!core-pull')
-          - token_tasks | to_json is search('DatastoreReader')
-          - token_tasks | to_json is search('DatastoreAudit')
-          - token_tasks | to_json is not search('DatastoreAdmin')
-          - token_tasks | to_json is not search('method.*DELETE')
-          - token_tasks | to_json is not search('datastore.*remove')
-          - token_tasks | to_json is not search('prune-job')
-          - token_tasks | to_json is not search('sync-job')
-          - pb[1].tasks | selectattr('name','equalto','Prepare CORE read-only token only when expressly selected') | first | json_query('when') == "pbs34_action == 'apply'"
+          - entries | length == 1
+          - entries[0].playbook == 'playbooks/media34-core-pbs.yml'
+          - entries[0].survey_vars[0].default_value == 'audit'
+          - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage']
+          - pb | length == 3
+          - "'DH_CORE_PBS_PUSH_TOKEN_SECRET' in (creds | to_json)"
+          - "'DH_CORE_PBS_RESTORE_TOKEN_SECRET' in (creds | to_json)"
+          - "'DH_INPUT_CORE_PBS_FINGERPRINT' in (entry05[0].survey_vars | to_json)"
+          - "'media34-core-pull-token.yml' not in (pb | to_json)"
+          - "'core-pull' not in (pb | to_json)"
+          - "'100.97.126.67' in (pb | to_json)"
+          - "'pbs-core' in (pb | to_json)"
+
+    - name: Require matching source/target, explicit direction and disabled deletion
+      ansible.builtin.assert:
+        that:
+          - prepare | to_json is search('api2/json/config/remote')
+          - prepare | to_json is search('api2/json/config/sync')
+          - prepare | to_json is search('PBSAuthCookie')
+          - prepare | to_json is search('sync-direction')
+          - prepare | to_json is search('push')
+          - prepare | to_json is search('remove-vanished')
+          - prepare | to_json is search('HOME34_PUSH_EXECUTED=false')
+          - prepare | to_json is not search('schedule:.*02:')
+          - pb | to_json is search('sync-job')
+          - restore | to_json is search('pbs-core-restore')
+          - restore | to_json is search('BACKUP_JOBS_CHANGED=false')
+          - restore | to_json is search('script')
+          - restore | to_json is not search('vzdump')
