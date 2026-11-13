@@ -19,7 +19,7 @@
         that:
           - core_entries | length == 1
           - core_entries[0].survey_vars[0].default_value == 'audit'
-          - core_entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','apply','backup_test']
+          - core_entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','apply']
           - pb | length == 4
           - token_tasks | to_json is search('root@pam!core-pull')
           - token_tasks | to_json is search('DatastoreReader')

@@ -14,7 +14,7 @@
     - name: Require explicitly selected safe action and existing GitHub credential
       ansible.builtin.assert:
         that:
-          - pbs34_action in ['audit','apply','backup_test']
+          - pbs34_action in ['audit','apply']
           - pbs34_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - DH_GITHUB_PROVISION_TOKEN | default('',true) | length > 0
         fail_msg: PBS34_INVALID_SITE_OR_ACTION
@@ -73,40 +73,6 @@
           - pbs34_pin.stat.pw_name == 'semaphore'
           - pbs34_pin.stat.mode == '0600'
         fail_msg: PBS34_MEDIA_PIN_UNAVAILABLE
-
-    - name: Read HOME PVE guest inventory to select one first backup
-      ansible.builtin.command:
-        argv:
-          - /usr/bin/ssh
-          - -i
-          - /var/lib/semaphore/.ssh/id_ed25519
-          - -o
-          - BatchMode=yes
-          - -o
-          - StrictHostKeyChecking=yes
-          - -o
-          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
-          - -o
-          - ConnectTimeout=7
-          - "root@{{ pve.ipv4 }}"
-          - /usr/bin/pvesh
-          - get
-          - /cluster/resources
-          - --type
-          - vm
-          - --output-format
-          - json
-      register: pbs34_pve_guests
-      changed_when: false
-
-    - name: Report VM/LXC identity status and disk size for one manual PBS backup
-      ansible.builtin.debug:
-        msg:
-          - "PBS34_GUEST_IDS={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='vmid') | list }}"
-          - "PBS34_GUEST_NAMES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='name') | list }}"
-          - "PBS34_GUEST_TYPES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='type') | list }}"
-          - "PBS34_GUEST_STATUSES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='status') | list }}"
-          - "PBS34_GUEST_MAXDISK_BYTES={{ (pbs34_pve_guests.stdout | from_json) | map(attribute='maxdisk') | list }}"
 
     - name: Read existing PVE backup jobs without modifying them
       ansible.builtin.command:
@@ -216,17 +182,6 @@
           - "PBS34_PVE_BACKUP_JOBS={{ (pbs34_pve_jobs.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
           - "PBS34_PVE_STORAGES={{ (pbs34_pve_storages.stdout | from_json) | map(attribute='storage') | list if pbs34_pve_storages.rc == 0 else 'UNAVAILABLE' }}"
           - "PBS34_PVE_BACKUP_DEFINITIONS={{ (pbs34_pve_jobs.stdout | from_json) if pbs34_pve_jobs.rc == 0 else 'UNAVAILABLE' }}"
-
-    - name: Select the exact guest for one-off backup
-      ansible.builtin.set_fact:
-        pbs34_pve_guest_candidates: >-
-          {{ (pbs34_pve_guests.stdout | from_json)
-             | selectattr('vmid','equalto',200) | list }}
-      when: pbs34_action == 'backup_test'
-
-    - name: Perform the explicitly requested first backup to HOME PBS
-      ansible.builtin.include_tasks: ../tasks/media34-first-backup.yml
-      when: pbs34_action == 'backup_test'
 
     - name: Register the existing media guest without changing it
       ansible.builtin.add_host:

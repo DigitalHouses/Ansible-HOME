@@ -5,10 +5,14 @@
 №33 #98: `Success`, создан и смонтирован `serzhan-pool/pbs-serzhan`, зарегистрированы PBS datastore/PVE Storage `pbs-serzhan`, расписание `dh-local-pbs-serzhan`.
 №34 #102: `Success` — создан `root@pam!core-pull`, ACL `DatastoreReader` и `DatastoreAudit` **только** на `/datastore/pbs-serzhan`, проверено чтение namespaces/groups через токен, сохранён секрет `0600` на HOME и DEV.
 №34 #103: `Success`, `changed=0`, `failed=0` — повторный apply не изменил токен, ACL и секреты.
+№34 #107: `Success`, `changed=1`, `failed=0` — вручную создан первый резервный snapshot действующего HOME LXC `uptimekuma`, CT200, через `vzdump` в `pbs-serzhan`. Backup Job, расписания и retention не изменены.
+№34 #108: `Success`, `changed=0`, `failed=0` — существующий ограниченный CORE token видит backup group `ct/200`, ровно **1 snapshot** и список его файлов в root namespace. Ротации токена не было.
+Одноразовое действие `backup_test` удалено из штатного №34 после приёмки; историю теста сохраняют Git и Semaphore. Штатные режимы №34 остались `audit` и `apply`.
+**Передача секрета в CORE Semaphore №05:** пока не выполнена — защищённая операция записи была заблокирована средой. Секрет остаётся только в защищённом файле DEV, CORE credentials не изменены. Планируемое имя secret: `DH_CORE50_HOME_SERZHAN_PBS_API_TOKEN`. Использовать разрешённый механизм управления существующей Variable Group CORE, не публиковать значение в чат или Git.
 
 **Актуальный TLS SHA-256 после пересоздания VM:** `4D:B5:B7:23:8A:73:91:68:49:9C:86:62:05:08:2B:16:9A:D9:47:21:DD:94:5C:EE:51:6D:90:8C:08:CA:FA:BD`. Старый SHA-256 ниже **недействителен**.
 
-**Параметры для CORE №50:** Remote `192.168.11.223:8007`, source datastore `pbs-serzhan`, namespace root `/` (в API `ns: ""`), Token ID `root@pam!core-pull`. Секрет только в `/home/dev/.config/ansible-home/serzhan-home-pbs-core-pull.secret`, mode `0600`; в CORE Semaphore №05 ввести через защищённый secret-параметр, **не копировать в чат или Git**. Текущие backup groups и snapshots **0** после чистого развёртывания; для проверки фактического Pull Sync нужен хотя бы один завершённый backup. CORE не менялся.
+**Параметры для CORE №50:** Remote `192.168.11.223:8007`, source datastore `pbs-serzhan`, namespace root `/` (в API `ns: ""`), Token ID `root@pam!core-pull`. Секрет только в `/home/dev/.config/ansible-home/serzhan-home-pbs-core-pull.secret`, mode `0600`; в CORE Semaphore №05 ввести через защищённый secret-параметр, **не копировать в чат или Git**. Подтверждены `ct/200` и **один snapshot**, видимый CORE read-only token. Secret ещё не записан в CORE Semaphore. CORE не менялся.
 
 ### Исторический аудит до destructive test
 
