@@ -1,7 +1,7 @@
 # HOME backup: Push to CORE and direct Restore
 
 **Решение принято 13.11.2026.** Проект DigitalHouses/Ansible-HOME.
-Прежняя модель CORE Pull устарела; реальный Push/Restore ещё не реализован.
+Прежняя модель CORE Pull устарела. HOME №34 реализует подготовку native PBS Push и PVE Restore storage; реальная E2E передача/восстановление ещё не принята.
 
 ## Потоки и ответственность
 
@@ -18,7 +18,7 @@
 | №05 HOME Credentials | Хранит выданные CORE Push и Restore credentials и TLS fingerprint CORE |
 | №30 Media Server | Развертывает VM, PBS и ZFS; `import` существующего диска или явно разрешённый `erase` |
 | №33 Local Backup | Рабочие локальные PBS datastore, PVE Backup Jobs и обслуживание |
-| №34 Central Backup (план) | HOME PBS Remote, Push Sync, ручной пилот и восстановление; текущая Pull-реализация историческая |
+| №34 Central Backup | `audit`, `prepare`, `push`, `restore-storage`; Pull `apply` выведено из эксплуатации, реальный Restore тест отдельно |
 | №70 Cloudflare | Веб-доступ через Tunnel + Access, без WARP |
 | №71 Tailscale | Приватная связность HOME PVE и PBS с CORE PBS; контролируемые обновления |
 
