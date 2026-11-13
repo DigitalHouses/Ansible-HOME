@@ -216,8 +216,8 @@
          (home71_prefs.ExitNodeIP | default('', true) | length > 0) or
          (home71_prefs.AdvertiseRoutes | default([], true) | length > 0) or
          (home71_prefs.AdvertiseExitNode | default(false) | bool) or
-         (((home71_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true)
-           | default(true, true)) | bool) }}
+         (((home71_prefs.get('AutoUpdate') | default({}, true)).get('Apply', true))
+           is not sameas false) }}
   when: home71_action in ['configure', 'join']
 
 - name: Apply only the necessary safe Tailscale preference changes
