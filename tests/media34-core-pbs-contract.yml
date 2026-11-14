@@ -20,13 +20,15 @@
           - entries | length == 1
           - entries[0].playbook == 'playbooks/media34-core-pbs.yml'
           - entries[0].survey_vars[0].default_value == 'audit'
-          - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage','restore-check','restore-test']
+          - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage','restore-check','restore-test','local-check','local-test']
           - entries[0].survey_vars[0]['values'][0].name is search('01.*Проверить')
           - entries[0].survey_vars[0]['values'][1].name is search('02.*НЕ отправлять')
           - entries[0].survey_vars[0]['values'][2].name is search('03.*ОТПРАВИТЬ')
           - entries[0].survey_vars[0]['values'][3].name is search('04.*восстановления')
           - entries[0].survey_vars[0]['values'][4].name is search('05.*Проверить')
           - entries[0].survey_vars[0]['values'][5].name is search('06.*RESTORE')
+          - entries[0].survey_vars[0]['values'][6].name is search('07.*локального PBS')
+          - entries[0].survey_vars[0]['values'][7].name is search('08.*ВОССТАНОВИТЬ')
           - entries[0].survey_vars[0].default_value == 'audit'
           - pb | length == 3
           - "'DH_CORE_PBS_PUSH_TOKEN_SECRET' in (creds | to_json)"
@@ -73,3 +75,19 @@
           - recovery_test | to_json is search('OS_RELEASE_VERIFIED')
           - recovery_test | to_json is not search('pct, start')
           - recovery_test | to_json is not search('vzdump')
+
+    - name: Require local PBS source is pinned and backups predate recreated media guest boot
+      ansible.builtin.assert:
+        that:
+          - "'local-check' in (pb | to_json)"
+          - "'local-test' in (pb | to_json)"
+          - "'home34_local_storage' in (pb | to_json)"
+          - "'home34_local_pbs_ip' in (pb | to_json)"
+          - "'home34_test_is_local' in (recovery_test | to_json)"
+          - "'home34_test_expected_host' in (recovery_test | to_json)"
+          - "'home34_test_recreate_boot_epoch' in (recovery_test | to_json)"
+          - "'HOME34_LOCAL_PBS_NO_PRE_RECREATE_CT_SNAPSHOT' in (recovery_test | to_json)"
+          - "'HOME34_LOCAL_BACKUP_PREDATES_RECREATE' in (recovery_test | to_json)"
+          - "'HOME34_TEST_RESTORE_PREDATES_RECREATE' in (recovery_test | to_json)"
+          - "'protection' in (recovery_test | to_json)"
+          - "'pct' in (recovery_test | to_json)"
