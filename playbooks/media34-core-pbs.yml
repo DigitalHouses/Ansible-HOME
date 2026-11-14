@@ -17,7 +17,7 @@
         that:
           - home34_profile == 'home'
           - home34_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-          - home34_action in ['audit', 'prepare', 'push', 'restore-storage']
+          - home34_action in ['audit', 'prepare', 'push', 'restore-storage', 'restore-check', 'restore-test']
           - DH_GITHUB_PROVISION_TOKEN | default('', true) | length > 0
           - pve.node | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -92,7 +92,7 @@
       changed_when: false
       no_log: true
 
-    - name: Register existing HOME PVE only for explicit restore storage setup
+    - name: Register existing HOME PVE only for explicit restore operations
       ansible.builtin.add_host:
         name: home34_pve
         groups: home34_pve_hosts
@@ -110,7 +110,7 @@
         home34_expected_pve: "{{ pve.node }}"
         home34_core_ip: 100.97.126.67
         home34_core_store: pbs-core
-      when: home34_action == 'restore-storage'
+      when: home34_action in ['restore-storage', 'restore-check', 'restore-test']
       changed_when: false
       no_log: true
 
@@ -265,3 +265,8 @@
   tasks:
     - name: Register a second PBS source for recovery without touching backup jobs
       ansible.builtin.include_tasks: ../tasks/media34-restore-storage.yml
+      when: home34_action == 'restore-storage'
+
+    - name: Audit or test a disposable CORE-to-HOME container restore
+      ansible.builtin.include_tasks: ../tasks/media34-test-restore.yml
+      when: home34_action in ['restore-check', 'restore-test']
