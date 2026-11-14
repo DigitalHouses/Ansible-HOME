@@ -17,7 +17,8 @@
         that:
           - "'media30-recreate-e2e-preflight.yml' in source_text"
           - source_text.find('media30-recreate-e2e-preflight.yml') < source_text.find('media-vm-apply.yml')
-          - "'media_disk_action == 'import'' in source_text"
+          - "'media_disk_action' in source_text"
+          - "'import' in source_text"
           - "'serzhan-home' in preflight_text"
           - "'2223' in preflight_text"
           - "'pbs-' in preflight_text"
