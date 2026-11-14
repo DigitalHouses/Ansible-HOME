@@ -196,7 +196,7 @@ tasks:
     description: "rclone/Restic, PBS 4.2+, локальный datastore/PVE Storage, ежедневный backup, retention 30d, prune/GC/verify и токен клиента; без VM/дисков"
   - name: "34-HOME PBS для CORE"
     playbook: playbooks/media34-core-pbs.yml
-    description: "01 Проверить; 02 подготовить передачу БЕЗ отправки; 03 ОТПРАВИТЬ резервные копии сейчас; 04 подключить CORE к PVE для восстановления. Локальные backup jobs не меняются"
+    description: "01 проверить; 02 подготовить; 03 отправить в CORE; 04 подключить CORE для Restore; 05 проверить тестовое восстановление; 06 восстановить и проверить CT с автоматической очисткой. Backup jobs не меняются"
     survey_vars:
       - name: DH_PBS_CORE_ACTION
         title: "Что сделать? Выбери одно действие:"
@@ -209,6 +209,8 @@ tasks:
           - {name: "02 — Подготовить отправку (копии НЕ отправлять)", value: prepare}
           - {name: "03 — ОТПРАВИТЬ резервные копии в CORE сейчас", value: push}
           - {name: "04 — Подключить CORE к PVE для восстановления (VM не восстанавливать)", value: restore-storage}
+          - {name: "05 — Проверить возможность тестового восстановления (без изменений)", value: restore-check}
+          - {name: "06 — ТЕСТОВЫЙ RESTORE CT из CORE (проверить файлы и удалить тест)", value: restore-test}
   - name: "60-DigitalHouses Agents"
     playbook: playbooks/digitalhouses-agents.yml
     description: "После настройки медиасервера: установить, проверить или обновить PVE Agent и Plex Agent; без VM и ZFS операций"
