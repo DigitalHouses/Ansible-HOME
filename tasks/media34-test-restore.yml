@@ -352,7 +352,7 @@
   register: home34_test_delete
   changed_when: true
   when:
-    - home34_action == 'restore-test'
+    - home34_action in ['restore-test', 'local-test']
     - home34_test_os_file is defined
     - home34_test_os_file.stat.isreg | default(false)
     - home34_test_unmount is defined
