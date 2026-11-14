@@ -1,0 +1,34 @@
+---
+- name: Guard media portal IP against stale site manifest values
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    portal: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media-portal-apply.yml') | from_yaml }}"
+    html: "{{ lookup('ansible.builtin.file', root ~ '/templates/media-portal.html.j2') }}"
+    nginx_http: "{{ lookup('ansible.builtin.file', root ~ '/templates/media-portal-nginx.conf.j2') }}"
+    nginx_https: "{{ lookup('ansible.builtin.file', root ~ '/templates/media-account-nginx.conf.j2') }}"
+  tasks:
+    - name: Require live media IPv4 before writing any portal or nginx config
+      ansible.builtin.assert:
+        that:
+          - portal[0].name is search('Read actual guest')
+          - portal[1].name is search('Require intended media parameter')
+          - portal[2].name is search('Prepare local media')
+          - portal[1]['ansible.builtin.assert'].fail_msg == 'MEDIA30_PORTAL_IP_DRIFT_REFUSE_OLD_ADDRESS'
+          - "'media_spec.network.ipv4' in (portal[1] | to_json)"
+          - "'ip' in portal[0]['ansible.builtin.command'].argv"
+          - "'regex_findall' in (portal | to_json)"
+          - "'media_spec.network.ipv4.split' in (portal | to_json)"
+
+    - name: Require page and nginx to derive IP from same site parameter
+      ansible.builtin.assert:
+        that:
+          - "'media_spec.network.ipv4.split' in html"
+          - "'media_spec.network.ipv4.split' in nginx_http"
+          - "'media_spec.network.ipv4.split' in nginx_https"
+          - "nginx_https.count('.0/24') == 2"
+          - "'192.168.11.250' not in html"
+          - "'192.168.11.250' not in nginx_http"
+          - "'192.168.11.250' not in nginx_https"

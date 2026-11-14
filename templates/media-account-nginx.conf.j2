@@ -15,7 +15,7 @@ server {
     add_header Referrer-Policy no-referrer always;
 
     location ^~ /account/api/ {
-        allow {{ media_spec.network.ipv4 }};
+        allow {{ media_spec.network.ipv4.split('/')[0].split('.')[:3] | join('.') }}.0/24;
         deny all;
         access_log off;
         client_max_body_size 512;
@@ -30,7 +30,7 @@ server {
     }
 
     location ^~ /account/ {
-        allow {{ media_spec.network.ipv4 }};
+        allow {{ media_spec.network.ipv4.split('/')[0].split('.')[:3] | join('.') }}.0/24;
         deny all;
         add_header Cache-Control "no-store" always;
         try_files $uri $uri/ =404;
