@@ -10,7 +10,8 @@
       - media_vm_action == 'recreate'
       - media_disk_action == 'import'
       - media_vm_conf.stat.exists
-      - media_vm_power.stdout | trim == 'status: running'
+      - >-
+        media_vm_power.stdout | trim == 'status: running'
       - media_current_vm.hostpci1 | default('') is search(media_spec.pci.sata_controller | regex_escape)
     fail_msg: MEDIA30_RECREATE_IMPORT_PINNED_GUEST_OR_DISK_MISMATCH
 
