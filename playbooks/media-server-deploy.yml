@@ -195,6 +195,13 @@
       changed_when: false
       when: media_vm_conf.stat.exists
 
+    - name: Verify existing ZFS and PBS survive planned VM2223 recreate and disk import
+      ansible.builtin.include_tasks: ../tasks/media30-recreate-e2e-preflight.yml
+      when:
+        - media_vm_action == 'recreate'
+        - media_disk_action == 'import'
+        - media_vm_conf.stat.exists
+
     - name: Summarize read-only target inspection
       ansible.builtin.debug:
         msg:
