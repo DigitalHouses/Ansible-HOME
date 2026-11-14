@@ -29,6 +29,17 @@
           - "'wipefs' not in preflight_text"
           - "'zpool destroy' not in preflight_text"
 
+    - name: Require every preflight Ansible assertion is a string
+      ansible.builtin.assert:
+        that:
+          - >-
+            (preflight
+             | selectattr('ansible.builtin.assert', 'defined')
+             | map(attribute='ansible.builtin.assert')
+             | map(attribute='that')
+             | flatten
+             | reject('string') | list | length) == 0
+
     - name: Require existing PBS datastore is reused, never initialized over stored snapshots
       ansible.builtin.assert:
         that:
