@@ -217,6 +217,8 @@
           - '0'
           - --unique
           - '1'
+          - --protection
+          - '0'
       register: home34_test_restore
       changed_when: true
       when: home34_test_ctid | int not in home34_test_existing_vmids
@@ -275,6 +277,20 @@
       changed_when: true
       when: home34_test_mount is defined and home34_test_mount.rc | default(1) == 0
 
+- name: Clear protection inherited from source only on verified disposable test CT
+  ansible.builtin.command:
+    argv: [pct, set, "{{ home34_test_ctid }}", --protection, '0']
+  register: home34_test_clear_protection
+  changed_when: true
+  when:
+    - home34_action == 'restore-test'
+    - home34_test_os_file is defined
+    - home34_test_os_file.stat.isreg | default(false)
+    - home34_test_passwd_file is defined
+    - home34_test_passwd_file.stat.isreg | default(false)
+    - home34_test_unmount is defined
+    - home34_test_unmount.rc == 0
+
 - name: Delete only the exact disposable CT after verified recovery
   ansible.builtin.command:
     argv: [pct, destroy, "{{ home34_test_ctid }}", --purge, '1']
@@ -286,6 +302,8 @@
     - home34_test_os_file.stat.isreg | default(false)
     - home34_test_unmount is defined
     - home34_test_unmount.rc == 0
+    - home34_test_clear_protection is defined
+    - home34_test_clear_protection.rc == 0
 
 - name: Require clean removal of disposable test container
   ansible.builtin.command:
