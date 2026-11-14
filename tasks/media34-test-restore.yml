@@ -1,7 +1,6 @@
 ---
-# A disposable restore exercise on HOME PVE against CORE PBS read-only storage.
-# Explicit actions: restore-check (read-only) or restore-test (restore, inspect,
-# destroy the newly created stopped test CT). Never starts a restored workload.
+# Disposable restore test: CORE namespace or preserved local PBS after OS recreate.
+# Only --source selection differs. Never starts a restored workload.
 - name: Confirm approved HOME Proxmox host before any recovery test
   ansible.builtin.command:
     argv: [hostname, -s]
@@ -12,40 +11,55 @@
   ansible.builtin.assert:
     that:
       - home34_test_hostname.stdout | trim == home34_expected_pve
-      - home34_action in ['restore-check', 'restore-test']
+      - home34_action in ['restore-check', 'restore-test', 'local-check', 'local-test']
     fail_msg: HOME34_RESTORE_TEST_WRONG_HOST
 
-- name: Read exact CORE restore-only PVE storage definition
+- name: Choose exact PBS source based on the requested action
+  ansible.builtin.set_fact:
+    home34_test_is_local: "{{ home34_action in ['local-check', 'local-test'] }}"
+    home34_test_storage_id: >-
+      {{ home34_local_storage if home34_action in ['local-check', 'local-test']
+         else 'pbs-core-restore' }}
+    home34_test_expected_host: >-
+      {{ home34_local_pbs_ip if home34_action in ['local-check', 'local-test']
+         else home34_core_ip }}
+    home34_test_expected_datastore: >-
+      {{ home34_local_storage if home34_action in ['local-check', 'local-test']
+         else home34_core_store }}
+
+- name: Read exact approved PVE PBS storage definition
   ansible.builtin.command:
-    argv: [pvesh, get, /storage/pbs-core-restore, --output-format, json]
+    argv: [pvesh, get, "/storage/{{ home34_test_storage_id }}", --output-format, json]
   register: home34_test_storage
   changed_when: false
 
-- name: Require existing CORE PBS namespace and backup-only storage
+- name: Require exact local root namespace or CORE namespace and backup-only storage
   ansible.builtin.assert:
     that:
       - (home34_test_storage.stdout | from_json).type == 'pbs'
-      - (home34_test_storage.stdout | from_json).server == home34_core_ip
-      - (home34_test_storage.stdout | from_json).datastore == home34_core_store
-      - (home34_test_storage.stdout | from_json).namespace == home34_site.id
+      - (home34_test_storage.stdout | from_json).server == home34_test_expected_host
+      - (home34_test_storage.stdout | from_json).datastore == home34_test_expected_datastore
+      - >-
+        ((home34_test_storage.stdout | from_json).namespace | default('', true)) in
+        ([''] if home34_test_is_local else [home34_site.id])
       - "'backup' in (home34_test_storage.stdout | from_json).content.split(',')"
     fail_msg: HOME34_TEST_RESTORE_WRONG_SOURCE_STORAGE
 
 - name: Require the remote CORE PBS storage to be online from HOME PVE
   ansible.builtin.command:
-    argv: [pvesm, status, --storage, pbs-core-restore]
+    argv: [pvesm, status, --storage, "{{ home34_test_storage_id }}"]
   register: home34_test_status
   changed_when: false
   failed_when: >-
     home34_test_status.rc != 0 or
-    home34_test_status.stdout is not search('pbs-core-restore\s+pbs\s+active')
+    home34_test_status.stdout is not search((home34_test_storage_id | regex_escape) ~ '\\s+pbs\\s+active')
 
-- name: Read backup inventory directly through HOME PVE and CORE Restore token
+- name: Read actual backup inventory through HOME PVE and the selected PBS token
   ansible.builtin.command:
     argv:
       - pvesh
       - get
-      - "/nodes/{{ home34_expected_pve }}/storage/pbs-core-restore/content"
+      - "/nodes/{{ home34_expected_pve }}/storage/{{ home34_test_storage_id }}/content"
       - --content
       - backup
       - --output-format
@@ -53,12 +67,12 @@
   register: home34_test_backup_list
   changed_when: false
 
-- name: Filter actual CT snapshots belonging only to the approved CORE namespace
+- name: Filter actual CT snapshots from exactly the selected PBS storage
   ansible.builtin.set_fact:
     home34_test_ct_list: >-
       {{ (home34_test_backup_list.stdout | from_json)
          | selectattr('format', 'equalto', 'pbs-ct')
-         | selectattr('volid', 'match', '^pbs-core-restore:backup/ct/[0-9]+/[0-9TZ:-]+$')
+         | selectattr('volid', 'match', '^' ~ (home34_test_storage_id | regex_escape) ~ ':backup/ct/[0-9]+/[0-9TZ:-]+$')
          | list }}
     home34_test_ctid: 99834
 
@@ -66,20 +80,58 @@
   ansible.builtin.assert:
     that:
       - home34_test_ct_list | length > 0
-    fail_msg: HOME34_RESTORE_TEST_NO_CORE_CT_BACKUPS
+    fail_msg: HOME34_RESTORE_TEST_NO_CT_BACKUPS_IN_SELECTED_STORAGE
 
-- name: Select a small and recent CT snapshot without guessing its volid
+- name: Read fresh media guest boot epoch to prove locally restored backups predate recreate
+  ansible.builtin.command:
+    argv: [qm, guest, exec, "{{ home34_media_vmid }}", --, cat, /proc/stat]
+  register: home34_test_media_boot
+  changed_when: false
+  when: home34_test_is_local
+
+- name: Require actual guest timestamp was returned by QEMU Guest Agent
+  ansible.builtin.assert:
+    that:
+      - home34_test_media_boot.rc == 0
+      - (home34_test_media_boot.stdout | from_json).exitcode | int == 0
+      - >-
+        ((home34_test_media_boot.stdout | from_json)['out-data']
+         | regex_findall('(?m)^btime ([0-9]+)$') | length) == 1
+    fail_msg: HOME34_LOCAL_PBS_RECREATE_BOOT_EPOCH_NOT_VERIFIED
+  when: home34_test_is_local
+
+- name: Limit local recovery source to snapshots created before new VM boot
   ansible.builtin.set_fact:
-    home34_test_latest: "{{ (home34_test_ct_list | map(attribute='ctime') | max) | int }}"
+    home34_test_recreate_boot_epoch: >-
+      {{ ((home34_test_media_boot.stdout | from_json)['out-data']
+          | regex_findall('(?m)^btime ([0-9]+)$') | first) | int }}
+  when: home34_test_is_local
+
+- name: Choose only snapshots from the preserved local PBS before VM recreation
+  ansible.builtin.set_fact:
+    home34_test_eligible_ct_list: >-
+      {{ (home34_test_ct_list
+          | selectattr('ctime', 'lt', home34_test_recreate_boot_epoch | int) | list)
+         if home34_test_is_local else home34_test_ct_list }}
+
+- name: Require preserved older-than-recreate local PBS CT snapshots
+  ansible.builtin.assert:
+    that:
+      - home34_test_eligible_ct_list | length > 0
+    fail_msg: HOME34_LOCAL_PBS_NO_PRE_RECREATE_CT_SNAPSHOT
+
+- name: Select a small and recent eligible CT snapshot without guessing its volid
+  ansible.builtin.set_fact:
+    home34_test_latest: "{{ (home34_test_eligible_ct_list | map(attribute='ctime') | max) | int }}"
 
 - name: Choose smallest CT backup among snapshots from the last 24h of the source
   ansible.builtin.set_fact:
     home34_test_candidate: >-
-      {{ ((home34_test_ct_list
+      {{ ((home34_test_eligible_ct_list
          | selectattr('ctime', 'ge', (home34_test_latest | int - 86400))
          | list) | sort(attribute='size') | first) }}
 
-- name: Check candidate's original container configuration from protected CORE copy
+- name: Check candidate's original container config directly from selected PBS backup
   ansible.builtin.command:
     argv: [pvesm, extractconfig, "{{ home34_test_candidate.volid }}"]
   register: home34_test_source_config
@@ -191,16 +243,19 @@
   ansible.builtin.debug:
     msg:
       - "HOME34_RESTORE_TEST_ACTION={{ home34_action }}"
+      - "HOME34_RESTORE_TEST_STORAGE={{ home34_test_storage_id }}"
       - "HOME34_RESTORE_TEST_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_RESTORE_TEST_SNAPSHOT_EPOCH={{ home34_test_candidate.ctime }}"
       - "HOME34_RESTORE_TEST_SOURCE_SIZE_BYTES={{ home34_test_candidate.size }}"
       - "HOME34_RESTORE_TEST_TARGET_STORAGE={{ home34_test_target }}"
       - "HOME34_RESTORE_TEST_TEMP_CTID={{ home34_test_ctid }}"
       - HOME34_RESTORE_TEST_EXISTING_VMS=UNCHANGED
       - "HOME34_RESTORE_TEST_RESUMED={{ home34_test_ctid | int in home34_test_existing_vmids }}"
+      - "HOME34_LOCAL_BACKUP_PREDATES_RECREATE={{ (home34_test_candidate.ctime | int) < (home34_test_recreate_boot_epoch | int) if home34_test_is_local else 'NOT_APPLICABLE' }}"
   changed_when: false
 
-- name: Restore and validate a disposable powered-off CT from the CORE PBS backup
-  when: home34_action == 'restore-test'
+- name: Restore and validate a disposable powered-off CT from selected PBS backup
+  when: home34_action in ['restore-test', 'local-test']
   block:
     - name: Restore verified CT snapshot to a fresh ID with auto-start disabled
       ansible.builtin.command:
@@ -283,7 +338,7 @@
   register: home34_test_clear_protection
   changed_when: true
   when:
-    - home34_action == 'restore-test'
+    - home34_action in ['restore-test', 'local-test']
     - home34_test_os_file is defined
     - home34_test_os_file.stat.isreg | default(false)
     - home34_test_passwd_file is defined
@@ -311,19 +366,22 @@
   register: home34_test_after_delete
   failed_when: false
   changed_when: false
-  when: home34_action == 'restore-test'
+  when: home34_action in ['restore-test', 'local-test']
 
 - name: Report completed recovery test and cleanup
   ansible.builtin.debug:
     msg:
       - HOME34_TEST_RESTORE=SUCCESS
+      - "HOME34_TEST_RESTORE_STORAGE={{ home34_test_storage_id }}"
+      - "HOME34_TEST_RESTORE_SNAPSHOT_EPOCH={{ home34_test_candidate.ctime }}"
+      - "HOME34_TEST_RESTORE_PREDATES_RECREATE={{ (home34_test_candidate.ctime | int) < (home34_test_recreate_boot_epoch | int) if home34_test_is_local else 'NOT_APPLICABLE' }}"
       - "HOME34_TEST_RESTORE_SOURCE={{ home34_test_candidate.volid }}"
       - "HOME34_TEST_RESTORE_TEMP_CTID={{ home34_test_ctid }}"
       - "HOME34_TEST_RESTORE_CONTENT=OS_RELEASE_VERIFIED"
       - HOME34_TEST_RESTORE_STARTED=false
       - "HOME34_TEST_RESTORE_CLEANUP={{ 'COMPLETE' if home34_test_after_delete.rc | default(0) != 0 else 'INCOMPLETE' }}"
       - HOME34_EXISTING_VMS=UNCHANGED
-  when: home34_action == 'restore-test'
+  when: home34_action in ['restore-test', 'local-test']
 
 - name: Fail recovery acceptance if disposable CT still exists after cleanup
   ansible.builtin.assert:
@@ -332,4 +390,4 @@
       - home34_test_delete.rc == 0
       - home34_test_after_delete.rc != 0
     fail_msg: HOME34_RESTORE_TEST_CLEANUP_REQUIRES_REVIEW
-  when: home34_action == 'restore-test'
+  when: home34_action in ['restore-test', 'local-test']
