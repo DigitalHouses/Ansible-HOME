@@ -195,7 +195,8 @@
         argv: [pct, status, "{{ home34_test_ctid }}"]
       register: home34_test_post_status
       changed_when: false
-      failed_when: home34_test_post_status.stdout | trim != 'status: stopped'
+      failed_when: >-
+        home34_test_post_status.stdout | trim != 'status: stopped'
 
     - name: Verify the recovered CT root filesystem was registered
       ansible.builtin.command:
