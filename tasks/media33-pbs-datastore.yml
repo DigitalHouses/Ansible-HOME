@@ -47,14 +47,37 @@
   register: media33_pbs_initial_contents
   when: media33_pbs_configured | length == 0
 
-- name: Refuse to initialize PBS over unknown existing dataset files
+- name: Detect preserved PBS datastore on imported ZFS after guest OS recreation
+  ansible.builtin.stat:
+    path: "{{ media33_pbs_path }}/{{ item }}"
+    follow: false
+  loop: [.chunks, .lock]
+  register: media33_pbs_reuse_markers
+  when:
+    - media33_pbs_configured | length == 0
+    - media33_pbs_initial_contents.matched | int > 0
+
+- name: Require the complete native PBS chunkstore layout before safe reuse
   ansible.builtin.assert:
     that:
-      - media33_pbs_initial_contents.matched == 0
-    fail_msg: >-
-      MEDIA33_PBS_DATASTORE_NONEMPTY: do not overwrite or automatically
-      adopt an unregistered datastore; inspect it separately.
-  when: media33_pbs_configured | length == 0
+      - media33_pbs_reuse_markers.results[0].stat.isdir | default(false)
+      - media33_pbs_reuse_markers.results[1].stat.isreg | default(false)
+      - media33_pbs_reuse_markers.results[0].stat.pw_name == 'backup'
+      - media33_pbs_reuse_markers.results[1].stat.pw_name == 'backup'
+    fail_msg: MEDIA33_PBS_REUSE_REQUIRES_VALID_EXISTING_CHUNKSTORE
+  when:
+    - media33_pbs_configured | length == 0
+    - media33_pbs_initial_contents.matched | int > 0
+
+- name: Select native PBS reuse for a verified nonempty existing datastore
+  ansible.builtin.set_fact:
+    media33_pbs_reuse_existing: >-
+      {{ (media33_pbs_configured | length == 0) and
+         (media33_pbs_initial_contents.matched | default(0) | int > 0) }}
+
+- name: Report whether an existing PBS chunkstore is being attached rather than created
+  ansible.builtin.debug:
+    msg: "MEDIA33_PBS_DATASTORE_MODE={{ 'REUSE_EXISTING_CHUNKS' if media33_pbs_reuse_existing else 'CREATE_EMPTY_OR_ALREADY_REGISTERED' }}"
 
 - name: Set PBS backup service ownership on the empty mountpoint only
   ansible.builtin.file:
@@ -64,16 +87,16 @@
     group: backup
     mode: '0755'
     follow: false
-  when: media33_pbs_configured | length == 0
+  when:
+    - media33_pbs_configured | length == 0
+    - not media33_pbs_reuse_existing | bool
 
 - name: Register the PBS datastore on the exact mounted ZFS path once
   ansible.builtin.command:
-    argv:
-      - proxmox-backup-manager
-      - datastore
-      - create
-      - "pbs-{{ media_site.owner_slug }}"
-      - "{{ media33_pbs_path }}"
+    argv: >-
+      {{ ['proxmox-backup-manager', 'datastore', 'create',
+          'pbs-' ~ media_site.owner_slug, media33_pbs_path] +
+         (['--reuse-datastore', 'true'] if media33_pbs_reuse_existing | bool else []) }}
   when: media33_pbs_configured | length == 0
   changed_when: true
 
