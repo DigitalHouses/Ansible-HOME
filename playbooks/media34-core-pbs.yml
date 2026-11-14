@@ -17,7 +17,7 @@
         that:
           - home34_profile == 'home'
           - home34_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-          - home34_action in ['audit', 'prepare', 'push', 'restore-storage', 'restore-check', 'restore-test']
+          - home34_action in ['audit', 'prepare', 'push', 'restore-storage', 'restore-check', 'restore-test', 'local-check', 'local-test']
           - DH_GITHUB_PROVISION_TOKEN | default('', true) | length > 0
           - pve.node | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -110,7 +110,10 @@
         home34_expected_pve: "{{ pve.node }}"
         home34_core_ip: 100.97.126.67
         home34_core_store: pbs-core
-      when: home34_action in ['restore-storage', 'restore-check', 'restore-test']
+        home34_local_storage: "pbs-{{ home34_site.owner_slug }}"
+        home34_local_pbs_ip: "{{ home34_media.network.ipv4.split('/')[0] }}"
+        home34_media_vmid: "{{ home34_media.vmid }}"
+      when: home34_action in ['restore-storage', 'restore-check', 'restore-test', 'local-check', 'local-test']
       changed_when: false
       no_log: true
 
@@ -267,6 +270,6 @@
       ansible.builtin.include_tasks: ../tasks/media34-restore-storage.yml
       when: home34_action == 'restore-storage'
 
-    - name: Audit or test a disposable CORE-to-HOME container restore
+    - name: Audit or test disposable CORE-to-HOME or preserved local PBS restore
       ansible.builtin.include_tasks: ../tasks/media34-test-restore.yml
-      when: home34_action in ['restore-check', 'restore-test']
+      when: home34_action in ['restore-check', 'restore-test', 'local-check', 'local-test']
