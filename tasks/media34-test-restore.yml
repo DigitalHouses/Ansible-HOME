@@ -1,0 +1,277 @@
+---
+# A disposable restore exercise on HOME PVE against CORE PBS read-only storage.
+# Explicit actions: restore-check (read-only) or restore-test (restore, inspect,
+# destroy the newly created stopped test CT). Never starts a restored workload.
+- name: Confirm approved HOME Proxmox host before any recovery test
+  ansible.builtin.command:
+    argv: [hostname, -s]
+  register: home34_test_hostname
+  changed_when: false
+
+- name: Reject incorrect destination PVE host
+  ansible.builtin.assert:
+    that:
+      - home34_test_hostname.stdout | trim == home34_expected_pve
+      - home34_action in ['restore-check', 'restore-test']
+    fail_msg: HOME34_RESTORE_TEST_WRONG_HOST
+
+- name: Read exact CORE restore-only PVE storage definition
+  ansible.builtin.command:
+    argv: [pvesh, get, /storage/pbs-core-restore, --output-format, json]
+  register: home34_test_storage
+  changed_when: false
+
+- name: Require existing CORE PBS namespace and backup-only storage
+  ansible.builtin.assert:
+    that:
+      - (home34_test_storage.stdout | from_json).type == 'pbs'
+      - (home34_test_storage.stdout | from_json).server == home34_core_ip
+      - (home34_test_storage.stdout | from_json).datastore == home34_core_store
+      - (home34_test_storage.stdout | from_json).namespace == home34_site.id
+      - "'backup' in (home34_test_storage.stdout | from_json).content.split(',')"
+    fail_msg: HOME34_TEST_RESTORE_WRONG_SOURCE_STORAGE
+
+- name: Require the remote CORE PBS storage to be online from HOME PVE
+  ansible.builtin.command:
+    argv: [pvesm, status, --storage, pbs-core-restore]
+  register: home34_test_status
+  changed_when: false
+  failed_when: >-
+    home34_test_status.rc != 0 or
+    home34_test_status.stdout is not search('pbs-core-restore\s+pbs\s+active')
+
+- name: Read backup inventory directly through HOME PVE and CORE Restore token
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - "/nodes/{{ home34_expected_pve }}/storage/pbs-core-restore/content"
+      - --content
+      - backup
+      - --output-format
+      - json
+  register: home34_test_backup_list
+  changed_when: false
+
+- name: Filter actual CT snapshots belonging only to the approved CORE namespace
+  ansible.builtin.set_fact:
+    home34_test_ct_list: >-
+      {{ (home34_test_backup_list.stdout | from_json)
+         | selectattr('format', 'equalto', 'pbs-ct')
+         | selectattr('volid', 'match', '^pbs-core-restore:backup/ct/[0-9]+/[0-9TZ:-]+$')
+         | list }}
+    home34_test_ctid: 99834
+
+- name: Require a verified-origin CT snapshot is available for real recovery
+  ansible.builtin.assert:
+    that:
+      - home34_test_ct_list | length > 0
+    fail_msg: HOME34_RESTORE_TEST_NO_CORE_CT_BACKUPS
+
+- name: Select a small and recent CT snapshot without guessing its volid
+  ansible.builtin.set_fact:
+    home34_test_latest: "{{ (home34_test_ct_list | map(attribute='ctime') | max) | int }}"
+
+- name: Choose smallest CT backup among snapshots from the last 24h of the source
+  ansible.builtin.set_fact:
+    home34_test_candidate: >-
+      {{ ((home34_test_ct_list
+         | selectattr('ctime', 'ge', (home34_test_latest | int - 86400))
+         | list) | sort(attribute='size') | first) }}
+
+- name: Check candidate's original container configuration from protected CORE copy
+  ansible.builtin.command:
+    argv: [pvesm, extractconfig, "{{ home34_test_candidate.volid }}"]
+  register: home34_test_source_config
+  changed_when: false
+
+- name: Require a simple container root filesystem without external mount points
+  ansible.builtin.assert:
+    that:
+      - home34_test_source_config.rc == 0
+      - home34_test_source_config.stdout is search('(?m)^rootfs:')
+      - home34_test_source_config.stdout is not search('(?m)^mp[0-9]+:')
+      - home34_test_source_config.stdout is not search('(?m)^hookscript:')
+    fail_msg: HOME34_RESTORE_TEST_COMPLEX_SOURCE_SELECT_ANOTHER_CT
+
+- name: Query current PVE CT and VM IDs before allocating a test CT
+  ansible.builtin.command:
+    argv: [pvesh, get, /cluster/resources, --type, vm, --output-format, json]
+  register: home34_test_resources
+  changed_when: false
+
+- name: Read active HOME PVE storages suitable for CT root filesystems
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - get
+      - "/nodes/{{ home34_expected_pve }}/storage"
+      - --content
+      - rootdir
+      - --output-format
+      - json
+  register: home34_test_local_stores
+  changed_when: false
+
+- name: Choose an active local PVE CT filesystem target
+  ansible.builtin.set_fact:
+    home34_test_target_options: >-
+      {{ (home34_test_local_stores.stdout | from_json)
+         | selectattr('storage', 'in', ['local-lvm', 'local-zfs', 'local'])
+         | selectattr('active', 'equalto', 1)
+         | selectattr('enabled', 'equalto', 1)
+         | list }}
+    home34_test_existing_vmids: >-
+      {{ (home34_test_resources.stdout | from_json)
+         | map(attribute='vmid') | map('int') | list }}
+
+- name: Confirm test container ID is unused and destination has adequate free space
+  ansible.builtin.assert:
+    that:
+      - home34_test_ctid | int not in home34_test_existing_vmids
+      - home34_test_target_options | length > 0
+      - >-
+        (home34_test_target_options
+         | selectattr('avail', 'ge', 4294967296) | list | length) > 0
+    fail_msg: HOME34_RESTORE_TEST_ID_OR_LOCAL_SPACE_UNAVAILABLE
+
+- name: Prefer Proxmox's managed local thin storage for disposable CT
+  ansible.builtin.set_fact:
+    home34_test_target: >-
+      {{ (home34_test_target_options
+         | selectattr('avail', 'ge', 4294967296)
+         | sort(attribute='storage') | first).storage }}
+
+- name: Refuse an orphaned existing volume owned by the reserved test CTID
+  ansible.builtin.command:
+    argv: [pvesm, list, "{{ home34_test_target }}", --vmid, "{{ home34_test_ctid }}"]
+  register: home34_test_existing_disks
+  changed_when: false
+
+- name: Require test CT has no pre-existing disk and source is reasonably small
+  ansible.builtin.assert:
+    that:
+      - home34_test_existing_disks.rc == 0
+      - home34_test_existing_disks.stdout_lines | length <= 1
+      - home34_test_candidate.size | int > 0
+      - home34_test_candidate.size | int <= 8589934592
+    fail_msg: HOME34_RESTORE_TEST_PREEXISTING_DATA_OR_OVERSIZED_BACKUP
+
+- name: Report recovery test plan and safety checks before any restore
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_RESTORE_TEST_ACTION={{ home34_action }}"
+      - "HOME34_RESTORE_TEST_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_RESTORE_TEST_SOURCE_SIZE_BYTES={{ home34_test_candidate.size }}"
+      - "HOME34_RESTORE_TEST_TARGET_STORAGE={{ home34_test_target }}"
+      - "HOME34_RESTORE_TEST_TEMP_CTID={{ home34_test_ctid }}"
+      - HOME34_RESTORE_TEST_EXISTING_VMS=UNCHANGED
+      - "HOME34_RESTORE_TEST_STARTED={{ home34_action == 'restore-test' }}"
+  changed_when: false
+
+- name: Restore and validate a disposable powered-off CT from the CORE PBS backup
+  when: home34_action == 'restore-test'
+  block:
+    - name: Restore verified CT snapshot to a fresh ID with auto-start disabled
+      ansible.builtin.command:
+        argv:
+          - pct
+          - restore
+          - "{{ home34_test_ctid }}"
+          - "{{ home34_test_candidate.volid }}"
+          - --storage
+          - "{{ home34_test_target }}"
+          - --hostname
+          - dh-restore-test
+          - --onboot
+          - '0'
+          - --unique
+          - '1'
+      register: home34_test_restore
+      changed_when: true
+
+    - name: Verify restored CT exists and is powered off
+      ansible.builtin.command:
+        argv: [pct, status, "{{ home34_test_ctid }}"]
+      register: home34_test_post_status
+      changed_when: false
+      failed_when: home34_test_post_status.stdout | trim != 'status: stopped'
+
+    - name: Verify the recovered CT root filesystem was registered
+      ansible.builtin.command:
+        argv: [pct, config, "{{ home34_test_ctid }}"]
+      register: home34_test_post_config
+      changed_when: false
+      failed_when: >-
+        home34_test_post_config.rc != 0 or
+        home34_test_post_config.stdout is not search('(?m)^rootfs:') or
+        home34_test_post_config.stdout is not search('(?m)^hostname: dh-restore-test')
+
+    - name: Mount restored CT filesystem only for read-only content validation
+      ansible.builtin.command:
+        argv: [pct, mount, "{{ home34_test_ctid }}"]
+      register: home34_test_mount
+      changed_when: true
+
+    - name: Inspect restored OS identity file without starting the container
+      ansible.builtin.stat:
+        path: "/var/lib/lxc/{{ home34_test_ctid }}/rootfs/etc/os-release"
+        follow: false
+      register: home34_test_os_file
+
+    - name: Require recovered CT contains a real Linux root filesystem
+      ansible.builtin.assert:
+        that:
+          - home34_test_os_file.stat.isreg | default(false)
+          - home34_test_os_file.stat.size | int > 0
+        fail_msg: HOME34_RESTORE_TEST_OS_FILE_NOT_RECOVERED
+
+  always:
+    - name: Unmount disposable test CT if it was mounted
+      ansible.builtin.command:
+        argv: [pct, unmount, "{{ home34_test_ctid }}"]
+      register: home34_test_unmount
+      failed_when: false
+      changed_when: true
+      when: home34_test_mount is defined and home34_test_mount.rc | default(1) == 0
+
+- name: Delete only the exact disposable CT after verified recovery
+  ansible.builtin.command:
+    argv: [pct, destroy, "{{ home34_test_ctid }}", --purge, '1']
+  register: home34_test_delete
+  changed_when: true
+  when:
+    - home34_action == 'restore-test'
+    - home34_test_os_file is defined
+    - home34_test_os_file.stat.isreg | default(false)
+    - home34_test_unmount is defined
+    - home34_test_unmount.rc == 0
+
+- name: Require clean removal of disposable test container
+  ansible.builtin.command:
+    argv: [pct, status, "{{ home34_test_ctid }}"]
+  register: home34_test_after_delete
+  failed_when: false
+  changed_when: false
+  when: home34_action == 'restore-test'
+
+- name: Report completed recovery test and cleanup
+  ansible.builtin.debug:
+    msg:
+      - HOME34_TEST_RESTORE=SUCCESS
+      - "HOME34_TEST_RESTORE_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_TEST_RESTORE_TEMP_CTID={{ home34_test_ctid }}"
+      - "HOME34_TEST_RESTORE_CONTENT=OS_RELEASE_VERIFIED"
+      - HOME34_TEST_RESTORE_STARTED=false
+      - "HOME34_TEST_RESTORE_CLEANUP={{ 'COMPLETE' if home34_test_after_delete.rc | default(0) != 0 else 'INCOMPLETE' }}"
+      - HOME34_EXISTING_VMS=UNCHANGED
+  when: home34_action == 'restore-test'
+
+- name: Fail recovery acceptance if disposable CT still exists after cleanup
+  ansible.builtin.assert:
+    that:
+      - home34_test_delete is defined
+      - home34_test_delete.rc == 0
+      - home34_test_after_delete.rc != 0
+    fail_msg: HOME34_RESTORE_TEST_CLEANUP_REQUIRES_REVIEW
+  when: home34_action == 'restore-test'
