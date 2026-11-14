@@ -161,9 +161,12 @@
       - home34_test_resume_config.rc == 0
       - home34_test_resume_status.rc == 0
       - "home34_test_resume_status.stdout | trim == 'status: stopped'"
-      - home34_test_resume_config.stdout is search('(?m)^hostname: dh-restore-test$')
-      - home34_test_resume_config.stdout is search('(?m)^rootfs: ' ~ home34_test_target ~ ':')
-      - home34_test_resume_config.stdout is not search('(?m)^onboot: 1$')
+      - >-
+        home34_test_resume_config.stdout is search('(?m)^hostname: dh-restore-test$')
+      - >-
+        home34_test_resume_config.stdout is search('(?m)^rootfs: ' ~ home34_test_target ~ ':')
+      - >-
+        home34_test_resume_config.stdout is not search('(?m)^onboot: 1$')
     fail_msg: HOME34_RESTORE_TEST_EXISTING_CT_NOT_OWNED_BY_THIS_TEST
   when: home34_test_ctid | int in home34_test_existing_vmids
 
