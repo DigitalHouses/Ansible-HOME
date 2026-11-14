@@ -125,10 +125,9 @@
       {{ (home34_test_resources.stdout | from_json)
          | map(attribute='vmid') | map('int') | list }}
 
-- name: Confirm test container ID is unused and destination has adequate free space
+- name: Confirm intended local storage has adequate free space
   ansible.builtin.assert:
     that:
-      - home34_test_ctid | int not in home34_test_existing_vmids
       - home34_test_target_options | length > 0
       - >-
         (home34_test_target_options
@@ -141,6 +140,303 @@
       {{ (home34_test_target_options
          | selectattr('avail', 'ge', 4294967296)
          | sort(attribute='storage') | first).storage }}
+
+- name: Inspect a reserved CT from an interrupted test without modifying it
+  ansible.builtin.command:
+    argv: [pct, config, "{{ home34_test_ctid }}"]
+  register: home34_test_resume_config
+  changed_when: false
+  when: home34_test_ctid | int in home34_test_existing_vmids
+
+- name: Check an interrupted test CT is still powered off
+  ansible.builtin.command:
+    argv: [pct, status, "{{ home34_test_ctid }}"]
+  register: home34_test_resume_status
+  changed_when: false
+  when: home34_test_ctid | int in home34_test_existing_vmids
+
+- name: Refuse to adopt or delete any CT other than the tagged disposable test
+  ansible.builtin.assert:
+    that:
+      - home34_test_resume_config.rc == 0
+      - home34_test_resume_status.rc == 0
+      - home34_test_resume_status.stdout | trim == 'status: stopped'
+      - home34_test_resume_config.stdout is search('(?m)^hostname: dh-restore-test
+  ansible.builtin.command:
+    argv: [pvesm, list, "{{ home34_test_target }}", --vmid, "{{ home34_test_ctid }}"]
+  register: home34_test_existing_disks
+  changed_when: false
+
+- name: Require test CT has no pre-existing disk and source is reasonably small
+  ansible.builtin.assert:
+    that:
+      - home34_test_existing_disks.rc == 0
+      - >-
+        (home34_test_ctid | int in home34_test_existing_vmids) or
+        (home34_test_existing_disks.stdout_lines | length <= 1)
+      - home34_test_candidate.size | int > 0
+      - home34_test_candidate.size | int <= 8589934592
+    fail_msg: HOME34_RESTORE_TEST_PREEXISTING_DATA_OR_OVERSIZED_BACKUP
+
+- name: Report recovery test plan and safety checks before any restore
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_RESTORE_TEST_ACTION={{ home34_action }}"
+      - "HOME34_RESTORE_TEST_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_RESTORE_TEST_SOURCE_SIZE_BYTES={{ home34_test_candidate.size }}"
+      - "HOME34_RESTORE_TEST_TARGET_STORAGE={{ home34_test_target }}"
+      - "HOME34_RESTORE_TEST_TEMP_CTID={{ home34_test_ctid }}"
+      - HOME34_RESTORE_TEST_EXISTING_VMS=UNCHANGED
+      - "HOME34_RESTORE_TEST_RESUMED={{ home34_test_ctid | int in home34_test_existing_vmids }}"
+  changed_when: false
+
+- name: Restore and validate a disposable powered-off CT from the CORE PBS backup
+  when: home34_action == 'restore-test'
+  block:
+    - name: Restore verified CT snapshot to a fresh ID with auto-start disabled
+      ansible.builtin.command:
+        argv:
+          - pct
+          - restore
+          - "{{ home34_test_ctid }}"
+          - "{{ home34_test_candidate.volid }}"
+          - --storage
+          - "{{ home34_test_target }}"
+          - --hostname
+          - dh-restore-test
+          - --onboot
+          - '0'
+          - --unique
+          - '1'
+      register: home34_test_restore
+      changed_when: true
+      when: home34_test_ctid | int not in home34_test_existing_vmids
+
+    - name: Verify restored CT exists and is powered off
+      ansible.builtin.command:
+        argv: [pct, status, "{{ home34_test_ctid }}"]
+      register: home34_test_post_status
+      changed_when: false
+      failed_when: >-
+        home34_test_post_status.stdout | trim != 'status: stopped'
+
+    - name: Verify the recovered CT root filesystem was registered
+      ansible.builtin.command:
+        argv: [pct, config, "{{ home34_test_ctid }}"]
+      register: home34_test_post_config
+      changed_when: false
+      failed_when: >-
+        home34_test_post_config.rc != 0 or
+        home34_test_post_config.stdout is not search('(?m)^rootfs:') or
+        home34_test_post_config.stdout is not search('(?m)^hostname: dh-restore-test')
+
+    - name: Mount restored CT filesystem only for read-only content validation
+      ansible.builtin.command:
+        argv: [pct, mount, "{{ home34_test_ctid }}"]
+      register: home34_test_mount
+      changed_when: true
+
+    - name: Inspect restored OS identity file without starting the container
+      ansible.builtin.stat:
+        path: "/var/lib/lxc/{{ home34_test_ctid }}/rootfs/etc/os-release"
+        follow: true
+      register: home34_test_os_file
+
+    - name: Require recovered CT contains a real Linux root filesystem
+      ansible.builtin.assert:
+        that:
+          - home34_test_os_file.stat.isreg | default(false)
+          - home34_test_os_file.stat.size | int > 0
+        fail_msg: HOME34_RESTORE_TEST_OS_FILE_NOT_RECOVERED
+
+  always:
+    - name: Unmount disposable test CT if it was mounted
+      ansible.builtin.command:
+        argv: [pct, unmount, "{{ home34_test_ctid }}"]
+      register: home34_test_unmount
+      failed_when: false
+      changed_when: true
+      when: home34_test_mount is defined and home34_test_mount.rc | default(1) == 0
+
+- name: Delete only the exact disposable CT after verified recovery
+  ansible.builtin.command:
+    argv: [pct, destroy, "{{ home34_test_ctid }}", --purge, '1']
+  register: home34_test_delete
+  changed_when: true
+  when:
+    - home34_action == 'restore-test'
+    - home34_test_os_file is defined
+    - home34_test_os_file.stat.isreg | default(false)
+    - home34_test_unmount is defined
+    - home34_test_unmount.rc == 0
+
+- name: Require clean removal of disposable test container
+  ansible.builtin.command:
+    argv: [pct, status, "{{ home34_test_ctid }}"]
+  register: home34_test_after_delete
+  failed_when: false
+  changed_when: false
+  when: home34_action == 'restore-test'
+
+- name: Report completed recovery test and cleanup
+  ansible.builtin.debug:
+    msg:
+      - HOME34_TEST_RESTORE=SUCCESS
+      - "HOME34_TEST_RESTORE_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_TEST_RESTORE_TEMP_CTID={{ home34_test_ctid }}"
+      - "HOME34_TEST_RESTORE_CONTENT=OS_RELEASE_VERIFIED"
+      - HOME34_TEST_RESTORE_STARTED=false
+      - "HOME34_TEST_RESTORE_CLEANUP={{ 'COMPLETE' if home34_test_after_delete.rc | default(0) != 0 else 'INCOMPLETE' }}"
+      - HOME34_EXISTING_VMS=UNCHANGED
+  when: home34_action == 'restore-test'
+
+- name: Fail recovery acceptance if disposable CT still exists after cleanup
+  ansible.builtin.assert:
+    that:
+      - home34_test_delete is defined
+      - home34_test_delete.rc == 0
+      - home34_test_after_delete.rc != 0
+    fail_msg: HOME34_RESTORE_TEST_CLEANUP_REQUIRES_REVIEW
+  when: home34_action == 'restore-test'
+)
+      - home34_test_resume_config.stdout is search('(?m)^rootfs: ' ~ home34_test_target ~ ':')
+      - home34_test_resume_config.stdout is not search('(?m)^onboot: 1
+  ansible.builtin.command:
+    argv: [pvesm, list, "{{ home34_test_target }}", --vmid, "{{ home34_test_ctid }}"]
+  register: home34_test_existing_disks
+  changed_when: false
+
+- name: Require test CT has no pre-existing disk and source is reasonably small
+  ansible.builtin.assert:
+    that:
+      - home34_test_existing_disks.rc == 0
+      - home34_test_existing_disks.stdout_lines | length <= 1
+      - home34_test_candidate.size | int > 0
+      - home34_test_candidate.size | int <= 8589934592
+    fail_msg: HOME34_RESTORE_TEST_PREEXISTING_DATA_OR_OVERSIZED_BACKUP
+
+- name: Report recovery test plan and safety checks before any restore
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_RESTORE_TEST_ACTION={{ home34_action }}"
+      - "HOME34_RESTORE_TEST_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_RESTORE_TEST_SOURCE_SIZE_BYTES={{ home34_test_candidate.size }}"
+      - "HOME34_RESTORE_TEST_TARGET_STORAGE={{ home34_test_target }}"
+      - "HOME34_RESTORE_TEST_TEMP_CTID={{ home34_test_ctid }}"
+      - HOME34_RESTORE_TEST_EXISTING_VMS=UNCHANGED
+      - "HOME34_RESTORE_TEST_STARTED={{ home34_action == 'restore-test' }}"
+  changed_when: false
+
+- name: Restore and validate a disposable powered-off CT from the CORE PBS backup
+  when: home34_action == 'restore-test'
+  block:
+    - name: Restore verified CT snapshot to a fresh ID with auto-start disabled
+      ansible.builtin.command:
+        argv:
+          - pct
+          - restore
+          - "{{ home34_test_ctid }}"
+          - "{{ home34_test_candidate.volid }}"
+          - --storage
+          - "{{ home34_test_target }}"
+          - --hostname
+          - dh-restore-test
+          - --onboot
+          - '0'
+          - --unique
+          - '1'
+      register: home34_test_restore
+      changed_when: true
+
+    - name: Verify restored CT exists and is powered off
+      ansible.builtin.command:
+        argv: [pct, status, "{{ home34_test_ctid }}"]
+      register: home34_test_post_status
+      changed_when: false
+      failed_when: >-
+        home34_test_post_status.stdout | trim != 'status: stopped'
+
+    - name: Verify the recovered CT root filesystem was registered
+      ansible.builtin.command:
+        argv: [pct, config, "{{ home34_test_ctid }}"]
+      register: home34_test_post_config
+      changed_when: false
+      failed_when: >-
+        home34_test_post_config.rc != 0 or
+        home34_test_post_config.stdout is not search('(?m)^rootfs:') or
+        home34_test_post_config.stdout is not search('(?m)^hostname: dh-restore-test')
+
+    - name: Mount restored CT filesystem only for read-only content validation
+      ansible.builtin.command:
+        argv: [pct, mount, "{{ home34_test_ctid }}"]
+      register: home34_test_mount
+      changed_when: true
+
+    - name: Inspect restored OS identity file without starting the container
+      ansible.builtin.stat:
+        path: "/var/lib/lxc/{{ home34_test_ctid }}/rootfs/etc/os-release"
+        follow: true
+      register: home34_test_os_file
+
+    - name: Require recovered CT contains a real Linux root filesystem
+      ansible.builtin.assert:
+        that:
+          - home34_test_os_file.stat.isreg | default(false)
+          - home34_test_os_file.stat.size | int > 0
+        fail_msg: HOME34_RESTORE_TEST_OS_FILE_NOT_RECOVERED
+
+  always:
+    - name: Unmount disposable test CT if it was mounted
+      ansible.builtin.command:
+        argv: [pct, unmount, "{{ home34_test_ctid }}"]
+      register: home34_test_unmount
+      failed_when: false
+      changed_when: true
+      when: home34_test_mount is defined and home34_test_mount.rc | default(1) == 0
+
+- name: Delete only the exact disposable CT after verified recovery
+  ansible.builtin.command:
+    argv: [pct, destroy, "{{ home34_test_ctid }}", --purge, '1']
+  register: home34_test_delete
+  changed_when: true
+  when:
+    - home34_action == 'restore-test'
+    - home34_test_os_file is defined
+    - home34_test_os_file.stat.isreg | default(false)
+    - home34_test_unmount is defined
+    - home34_test_unmount.rc == 0
+
+- name: Require clean removal of disposable test container
+  ansible.builtin.command:
+    argv: [pct, status, "{{ home34_test_ctid }}"]
+  register: home34_test_after_delete
+  failed_when: false
+  changed_when: false
+  when: home34_action == 'restore-test'
+
+- name: Report completed recovery test and cleanup
+  ansible.builtin.debug:
+    msg:
+      - HOME34_TEST_RESTORE=SUCCESS
+      - "HOME34_TEST_RESTORE_SOURCE={{ home34_test_candidate.volid }}"
+      - "HOME34_TEST_RESTORE_TEMP_CTID={{ home34_test_ctid }}"
+      - "HOME34_TEST_RESTORE_CONTENT=OS_RELEASE_VERIFIED"
+      - HOME34_TEST_RESTORE_STARTED=false
+      - "HOME34_TEST_RESTORE_CLEANUP={{ 'COMPLETE' if home34_test_after_delete.rc | default(0) != 0 else 'INCOMPLETE' }}"
+      - HOME34_EXISTING_VMS=UNCHANGED
+  when: home34_action == 'restore-test'
+
+- name: Fail recovery acceptance if disposable CT still exists after cleanup
+  ansible.builtin.assert:
+    that:
+      - home34_test_delete is defined
+      - home34_test_delete.rc == 0
+      - home34_test_after_delete.rc != 0
+    fail_msg: HOME34_RESTORE_TEST_CLEANUP_REQUIRES_REVIEW
+  when: home34_action == 'restore-test'
+)
+    fail_msg: HOME34_RESTORE_TEST_EXISTING_CT_NOT_OWNED_BY_THIS_TEST
+  when: home34_test_ctid | int in home34_test_existing_vmids
 
 - name: Refuse an orphaned existing volume owned by the reserved test CTID
   ansible.builtin.command:
