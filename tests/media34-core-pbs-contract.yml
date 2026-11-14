@@ -9,6 +9,7 @@
     pb: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media34-core-pbs.yml') | from_yaml }}"
     prepare: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-push-prepare.yml') | from_yaml }}"
     restore: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-restore-storage.yml') | from_yaml }}"
+    recovery_test: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-test-restore.yml') | from_yaml }}"
     creds: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/obtain-site-credentials.yml') | from_yaml }}"
     entries: "{{ catalog.tasks | selectattr('name', 'equalto', '34-HOME PBS для CORE') | list }}"
     entry05: "{{ catalog.tasks | selectattr('name', 'equalto', '05-Ввести и проверить credentials') | list }}"
@@ -19,11 +20,13 @@
           - entries | length == 1
           - entries[0].playbook == 'playbooks/media34-core-pbs.yml'
           - entries[0].survey_vars[0].default_value == 'audit'
-          - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage']
+          - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage','restore-check','restore-test']
           - entries[0].survey_vars[0]['values'][0].name is search('01.*Проверить')
           - entries[0].survey_vars[0]['values'][1].name is search('02.*НЕ отправлять')
           - entries[0].survey_vars[0]['values'][2].name is search('03.*ОТПРАВИТЬ')
           - entries[0].survey_vars[0]['values'][3].name is search('04.*восстановления')
+          - entries[0].survey_vars[0]['values'][4].name is search('05.*Проверить')
+          - entries[0].survey_vars[0]['values'][5].name is search('06.*RESTORE')
           - entries[0].survey_vars[0].default_value == 'audit'
           - pb | length == 3
           - "'DH_CORE_PBS_PUSH_TOKEN_SECRET' in (creds | to_json)"
@@ -55,3 +58,18 @@
           - restore | to_json is search('BACKUP_JOBS_CHANGED=false')
           - restore | to_json is search('script')
           - restore | to_json is not search('vzdump')
+
+    - name: Require test Restore to use fresh disposable stopped CT without modifying backups
+      ansible.builtin.assert:
+        that:
+          - pb | to_json is search('media34-test-restore.yml')
+          - recovery_test | to_json is search('pbs-core-restore')
+          - recovery_test | to_json is search('pct')
+          - recovery_test | to_json is search('restore')
+          - recovery_test | to_json is search('99834')
+          - recovery_test | to_json is search('pct, destroy')
+          - recovery_test | to_json is search('pct, mount')
+          - recovery_test | to_json is search('pct, unmount')
+          - recovery_test | to_json is search('OS_RELEASE_VERIFIED')
+          - recovery_test | to_json is not search('pct, start')
+          - recovery_test | to_json is not search('vzdump')
