@@ -242,11 +242,19 @@
         follow: true
       register: home34_test_os_file
 
+    - name: Inspect recovered user database inside the mounted CT rootfs
+      ansible.builtin.stat:
+        path: "/var/lib/lxc/{{ home34_test_ctid }}/rootfs/etc/passwd"
+        follow: false
+      register: home34_test_passwd_file
+
     - name: Require recovered CT contains a real Linux root filesystem
       ansible.builtin.assert:
         that:
           - home34_test_os_file.stat.isreg | default(false)
           - home34_test_os_file.stat.size | int > 0
+          - home34_test_passwd_file.stat.isreg | default(false)
+          - home34_test_passwd_file.stat.size | int > 0
         fail_msg: HOME34_RESTORE_TEST_OS_FILE_NOT_RECOVERED
 
   always:
