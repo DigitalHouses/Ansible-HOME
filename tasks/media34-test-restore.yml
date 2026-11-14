@@ -217,7 +217,7 @@
     - name: Inspect restored OS identity file without starting the container
       ansible.builtin.stat:
         path: "/var/lib/lxc/{{ home34_test_ctid }}/rootfs/etc/os-release"
-        follow: false
+        follow: true
       register: home34_test_os_file
 
     - name: Require recovered CT contains a real Linux root filesystem
