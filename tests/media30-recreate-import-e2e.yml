@@ -1,0 +1,40 @@
+---
+- name: Verify HOME VM2223 recreate requires live preserved ZFS/PBS preflight
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  vars:
+    root: "{{ playbook_dir | dirname }}"
+    deploy: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media-server-deploy.yml') | from_yaml }}"
+    preflight: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media30-recreate-e2e-preflight.yml') | from_yaml }}"
+    storage: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media33-pbs-datastore.yml') | from_yaml }}"
+    source_text: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/media-server-deploy.yml') }}"
+    preflight_text: "{{ preflight | to_json }}"
+    storage_text: "{{ storage | to_json }}"
+  tasks:
+    - name: Refuse destructive VM recreate without verified import and PBS ZFS chunks
+      ansible.builtin.assert:
+        that:
+          - "'media30-recreate-e2e-preflight.yml' in source_text"
+          - source_text.find('media30-recreate-e2e-preflight.yml') < source_text.find('media-vm-apply.yml')
+          - "'media_disk_action' in source_text"
+          - "'import' in source_text"
+          - "'serzhan-home' in preflight_text"
+          - "'2223' in preflight_text"
+          - "'pbs-' in preflight_text"
+          - "'.chunks' in preflight_text"
+          - "'zpool' in preflight_text"
+          - "'healthy' in preflight_text"
+          - "'datastore' in preflight_text"
+          - "'wipefs' not in preflight_text"
+          - "'zpool destroy' not in preflight_text"
+
+    - name: Require existing PBS datastore is reused, never initialized over stored snapshots
+      ansible.builtin.assert:
+        that:
+          - "'--reuse-datastore' in storage_text"
+          - "'.chunks' in storage_text"
+          - "'.lock' in storage_text"
+          - "'media33_pbs_reuse_existing' in storage_text"
+          - "'MEDIA33_PBS_REUSE_REQUIRES_VALID_EXISTING_CHUNKSTORE' in storage_text"
+          - "'proxmox-backup-manager, datastore, remove' not in storage_text"
