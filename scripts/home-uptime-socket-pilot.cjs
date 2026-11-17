@@ -4,6 +4,7 @@
 const { io } = require('socket.io-client');
 const socket = io('http://127.0.0.1:3001', { transports: ['websocket'], timeout: 8000, reconnection: false });
 let loggedIn = false;
+let accountStatus = 'EXISTING';
 let monitors = null;
 let notifications = null;
 let started = false;
@@ -26,12 +27,26 @@ function call(event, ...args) {
 }
 socket.on('connect_error', () => finish('CONNECT_FAILED'));
 socket.on('disconnect', reason => { if (!started && reason !== 'io client disconnect') finish('DISCONNECTED'); });
-socket.on('loginRequired', () => {
-    socket.timeout(7000).emit('login', { username: cfg.username, password: cfg.password }, (err, response) => {
-        if (err || !response?.ok) return finish('AUTH_FAILED_OR_2FA_REQUIRED');
+// Explicitly query first-run state. Never reset or overwrite an existing user.
+socket.on('connect', async () => {
+    try {
+        const requiresSetup = await new Promise((resolve, reject) => {
+            socket.timeout(7000).emit('needSetup', (err, result) => {
+                if (err || typeof result !== 'boolean') return reject(new Error('SETUP_QUERY_FAILED'));
+                resolve(result);
+            });
+        });
+        if (requiresSetup) {
+            await call('setup', cfg.username, cfg.password);
+            accountStatus = 'CREATED';
+        }
+        const response = await call('login', { username: cfg.username, password: cfg.password });
+        if (!response?.ok) throw new Error('AUTH_FAILED');
         loggedIn = true;
         maybeRun();
-    });
+    } catch (e) {
+        finish(e.message === 'API_REJECTED_login' ? 'AUTH_FAILED_OR_2FA_REQUIRED' : 'INITIAL_SETUP_OR_AUTH_FAILED');
+    }
 });
 socket.on('monitorList', list => { monitors = Object.values(list || {}); maybeRun(); });
 socket.on('notificationList', list => { notifications = Array.isArray(list) ? list : Object.values(list || {}); maybeRun(); });
@@ -71,7 +86,7 @@ async function maybeRun() {
             }
             // Preserve existing monitor; do not silently change notification bindings.
             const linked = notificationID === null || !!current.notificationIDList?.[notificationID];
-            finish(`MONITOR=EXISTING ID=${current.id} TELEGRAM=${telegramStatus} LINKED=${linked}`, 0);
+            finish(`ACCOUNT=${accountStatus} MONITOR=EXISTING ID=${current.id} TELEGRAM=${telegramStatus} LINKED=${linked}`, 0);
         }
         const monitor = {
             name, type: 'ping', hostname: cfg.pveIP, active: true,
@@ -80,7 +95,7 @@ async function maybeRun() {
             kafkaProducerBrokers: [], kafkaProducerSaslOptions: {}, rabbitmqNodes: [], conditions: []
         };
         const result = await call('add', monitor);
-        finish(`MONITOR=CREATED ID=${result.monitorID} TELEGRAM=${telegramStatus} LINKED=${notificationID !== null}`, 0);
+        finish(`ACCOUNT=${accountStatus} MONITOR=CREATED ID=${result.monitorID} TELEGRAM=${telegramStatus} LINKED=${notificationID !== null}`, 0);
     } catch (e) {
         // Never print remote exception messages: some HTTP libraries include tokens in their errors.
         finish(e.message.startsWith('SOCKET_TIMEOUT_') ? 'SOCKET_TIMEOUT' : 'API_OPERATION_FAILED');

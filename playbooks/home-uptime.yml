@@ -122,6 +122,30 @@
       changed_when: true
       when: home36_setup.rc != 0
 
+    - name: Automatically choose SQLite on first install without replacing an existing database
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ home_lxc_id }}"
+          - --
+          - sh
+          - -c
+          - >-
+            set -eu;
+            d=/var/lib/uptime-kuma/data;
+            install -d -o uptime-kuma -g uptime-kuma -m 0750 "$d";
+            if [ ! -e "$d/db-config.json" ] && [ ! -e "$d/kuma.db" ]; then
+              printf '%s\n' '{"type":"sqlite"}' > "$d/db-config.json";
+              chown uptime-kuma:uptime-kuma "$d/db-config.json";
+              chmod 0600 "$d/db-config.json";
+              echo SQLITE_CONFIG_CREATED;
+            else
+              echo SQLITE_CONFIG_PRESERVED;
+            fi
+      register: home36_sqlite_config
+      changed_when: "'SQLITE_CONFIG_CREATED' in home36_sqlite_config.stdout"
+
     - name: Inspect existing native Uptime Kuma systemd unit
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, cat, /etc/systemd/system/uptime-kuma.service]
