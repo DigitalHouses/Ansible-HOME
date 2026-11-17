@@ -51,3 +51,26 @@ by task 36.
 These tasks operate **only on the local HOME PVE**, creating their own LXC.
 They do not modify CORE, Cloudflare, media VM, existing backup jobs,
 or unrelated VM/LXC. Destructive recreation is not supported.
+
+## Optional Socket.IO pilot (HOME task 36)
+
+Uptime Kuma 2.5.11 internally exposes authenticated Socket.IO methods (`login`, `add`,
+`addNotification`, `testNotification`). HOME task **05** optionally saves existing
+Uptime administrator login/password and Telegram Bot Token/Chat ID as protected
+Semaphore secrets. Never store them in Git or paste them into job logs.
+
+When the two administrator credentials are present, task 36 performs a single
+idempotent pilot: create **HOME PVE** ICMP monitor for HOME `.220` at 60 seconds,
+only when absent. Telegram is optional: when both Bot Token and Chat ID are
+present, verify delivery via `testNotification`, create a named `HOME Telegram`
+notification if absent, and attach it to the new monitor. Existing monitor and
+notification records are not overwritten or duplicated. The script is supplied
+to the guest via stdin and does not persist credentials or change the database
+outside the application API. If Telegram is added after the monitor already
+exists, the pilot does **not** silently rewrite the monitor's bindings; it reports
+`LINKED=false` for separate reconciliation.
+
+This is a **pilot for pinned v2.5.11**, not a claim that Socket.IO is a stable
+third-party API. Monitor CRUD via an official REST API is not available in this
+release. The remaining six monitors are intentionally out of scope until the
+pilot succeeds on the live HOME installation.

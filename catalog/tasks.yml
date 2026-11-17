@@ -11,6 +11,10 @@ tasks:
       - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "Proxmox — пароль root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_MEDIA_ROOT_PASSWORD, title: "Медиасервер — пароль Linux root / PBS root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_POSTGRES_PASSWORD, title: "PostgreSQL HOME — пароль пользователя postgres (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_UPTIME_ADMIN_USERNAME, title: "Uptime Kuma — логин администратора (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_UPTIME_ADMIN_PASSWORD, title: "Uptime Kuma — пароль администратора (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_UPTIME_TELEGRAM_BOT_TOKEN, title: "Uptime Kuma — Telegram Bot Token (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_UPTIME_TELEGRAM_CHAT_ID, title: "Uptime Kuma — Telegram Chat ID (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_GITHUB_PROVISION_TOKEN, title: "GitHub — токен доступа (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_CLOUDFLARE_API_TOKEN, title: "Cloudflare — API-токен (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_TAILSCALE_AUTH_KEY, title: "Tailscale — ключ регистрации PBS (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}

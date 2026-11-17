@@ -188,6 +188,47 @@
       retries: 12
       delay: 5
 
+    - name: Verify guest-side Socket.IO client and stdin execution path
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, bash, -lc, "cd /opt/uptime-kuma && node -"]
+        stdin: "console.log(require('socket.io-client').io ? 'SOCKET_IO_READY' : 'MISSING')"
+      register: home36_socket_client
+      changed_when: false
+      failed_when: home36_socket_client.rc != 0 or 'SOCKET_IO_READY' not in home36_socket_client.stdout
+
+    - name: Pilot — create only HOME PVE monitor and optional Telegram via authenticated Socket.IO
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ home_lxc_id }}"
+          - --
+          - bash
+          - -lc
+          - "cd /opt/uptime-kuma && node -"
+        stdin: |-
+          const cfg = {{ {'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220'} | to_json }};
+          {{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/home-uptime-socket-pilot.cjs') }}
+      register: home36_socket_pilot
+      failed_when: false
+      changed_when: "'MONITOR=CREATED' in home36_socket_pilot.stdout or 'TELEGRAM=TESTED_AND_CREATED' in home36_socket_pilot.stdout"
+      when:
+        - DH_UPTIME_ADMIN_USERNAME | default('', true) | length > 0
+        - DH_UPTIME_ADMIN_PASSWORD | default('', true) | length > 0
+      no_log: true
+
+    - name: Report pilot result without secrets
+      ansible.builtin.debug:
+        msg: "{{ home36_socket_pilot.stdout | trim }}"
+      when: home36_socket_pilot is not skipped
+
+    - name: Stop on unsuccessful Socket.IO pilot with a sanitized result
+      ansible.builtin.fail:
+        msg: "{{ home36_socket_pilot.stdout | default('HOME_KUMA_PILOT_NO_OUTPUT') | trim }}"
+      when:
+        - home36_socket_pilot is not skipped
+        - home36_socket_pilot.rc != 0
+
     - name: Report server readiness without claiming monitors were provisioned
       ansible.builtin.debug:
-        msg: "HOME36=SERVICE_READY http://{{ home_lxc_ip }}:3001; MONITORS=CONFIGURE_ONCE_IN_UPSTREAM_UI; state preserved after setup"
+        msg: "HOME36=SERVICE_READY http://{{ home_lxc_ip }}:3001; Socket.IO pilot runs only when admin credentials are set in task 05"
