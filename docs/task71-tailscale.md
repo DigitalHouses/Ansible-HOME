@@ -31,7 +31,7 @@ CORE уже принят: `dh-core-pve` = `100.64.243.13`, `dh-core-pbs` = `100.
 | `join` | Не разлогинивает существующий Running-клиент; новый клиент входит в тот же tailnet через секрет №05 |
 | `update` | Только установленный пакет Tailscale до актуальной stable версии, без `apt upgrade`, ядра и reboot |
 
-Общий профиль: `accept-dns=false`, `accept-routes=false`, пустой exit node и advertised routes, `advertise-exit-node=false`, `auto-update=false`. Не используем subnet router, exit node, Tailscale SSH без отдельного решения. Уникальные Tailscale IP `100.64.0.0/10` разрешены; не удаляем локальный доступ в tailnet.
+Общий профиль: `accept-dns=false`, `accept-routes=false`, пустой exit node и advertised routes, `advertise-exit-node=false`, `auto-update=true`. Не используем subnet router, exit node, Tailscale SSH без отдельного решения. Уникальные Tailscale IP `100.64.0.0/10` разрешены; не удаляем локальный доступ в tailnet.
 
 Перед и после любого действия проверяем `ip -4 route get 1.1.1.1`, `/etc/resolv.conf` и DNS на default интерфейсе через `resolvectl`, если доступен. Перед любым действием явная защитная проверка запрещает `tailscale0` как default route и `100.100.100.100` как системный DNS. Для любого уже подключённого узла, включая `audit`, также проверяется фактический профиль `tailscale debug prefs`: `CorpDNS=false`, `RouteAll=false`, без exit node и объявленных subnet routes. Нарушение = `failed`, а не ложный `success`. Это дополняет исходную проверку CORE №71 и помогает обнаруживать небезопасные настройки, существовавшие ещё до запуска задачи. На PVE и PBS используется уже закреплённый SSH Semaphore: для PBS — `media80_known_hosts`. При изменении LAN DNS/default route — явный failed, массовое применение останавливается. Реальные локальные Backup Jobs/PBS, Cloudflare Tunnel и HA не изменяются.
 
@@ -47,9 +47,13 @@ CORE уже принят: `dh-core-pve` = `100.64.243.13`, `dh-core-pbs` = `100.
 
 CORE №50 готовит namespace и разные по назначению PBS Push/Restore credentials; HOME №71 ими не управляет.
 
-## Плановые обновления
+## Обновление Tailscale
 
-После проверки расписаний локальных Backup Jobs — создать Semaphore Schedule `71/update/both`. Кандидат: воскресенье ночью по местному времени дома; не пересекать CORE №71, большие PBS sync и HOME №70 `cloudflared`. Точное UTC cron установить по часовому поясу действующего Semaphore. Сохранить возможность ручного `update` и историю ошибок. Сначала ручной `update`/идемпотентность, затем активировать Schedule.
+HOME №71 при `configure` или `join` включает встроенное автообновление
+`tailscale set --auto-update=true` на PVE и PBS. Клиент самостоятельно
+устанавливает стабильные релизы, когда они одобрены Tailscale; отдельные
+расписания Semaphore не нужны. Действие `update` остаётся доступным
+для однократного ручного обновления установленного клиента.
 
 Cloudflare №70 остаётся единственным контроллером Tunnel/Access, включая отдельное будущее обновление `cloudflared`. HOME WARP не нужен; уже действующий private PBS Cloudflare route сохраняется лишь как legacy до отдельной безопасной очистки после E2E.
 
