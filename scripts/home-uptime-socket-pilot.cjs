@@ -5,6 +5,7 @@ const { io } = require('socket.io-client');
 const socket = io('http://127.0.0.1:3001', { transports: ['websocket'], timeout: 8000, reconnection: false });
 let loggedIn = false;
 let accountStatus = 'EXISTING';
+let authStage = 'CONNECT';
 let monitors = null;
 let notifications = null;
 let started = false;
@@ -30,6 +31,7 @@ socket.on('disconnect', reason => { if (!started && reason !== 'io client discon
 // Explicitly query first-run state. Never reset or overwrite an existing user.
 socket.on('connect', async () => {
     try {
+        authStage = 'NEED_SETUP';
         const requiresSetup = await new Promise((resolve, reject) => {
             socket.timeout(7000).emit('needSetup', (err, result) => {
                 if (err || typeof result !== 'boolean') return reject(new Error('SETUP_QUERY_FAILED'));
@@ -37,15 +39,19 @@ socket.on('connect', async () => {
             });
         });
         if (requiresSetup) {
+            authStage = 'SETUP';
             await call('setup', cfg.username, cfg.password);
             accountStatus = 'CREATED';
         }
+        authStage = 'LOGIN';
         const response = await call('login', { username: cfg.username, password: cfg.password });
         if (!response?.ok) throw new Error('AUTH_FAILED');
         loggedIn = true;
         maybeRun();
     } catch (e) {
-        finish(e.message === 'API_REJECTED_login' ? 'AUTH_FAILED_OR_2FA_REQUIRED' : 'INITIAL_SETUP_OR_AUTH_FAILED');
+        const reason = e.message === 'API_REJECTED_login' ? 'REJECTED' :
+            e.message.startsWith('SOCKET_TIMEOUT_') ? 'TIMEOUT' : 'UNEXPECTED';
+        finish(`AUTH_STAGE=${authStage} FAILURE=${reason}`);
     }
 });
 socket.on('monitorList', list => { monitors = Object.values(list || {}); maybeRun(); });
