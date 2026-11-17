@@ -74,3 +74,20 @@ This is a **pilot for pinned v2.5.11**, not a claim that Socket.IO is a stable
 third-party API. Monitor CRUD via an official REST API is not available in this
 release. The remaining six monitors are intentionally out of scope until the
 pilot succeeds on the live HOME installation.
+
+### Fully unattended first-run initialization
+
+On a brand-new CT1237, task 36 writes the official Uptime Kuma SQLite
+`db-config.json` only when neither it nor `kuma.db` exists; existing state is
+untouched. If the task 05 Uptime administrator credentials are present, the
+Socket.IO client first calls `needSetup`; only when it returns `true` does it
+create the first user with upstream `setup(username, password)` and then log in.
+If a user already exists, it attempts login with the saved credentials and
+**refuses to overwrite or reset** the account if login fails. Password changes
+of an existing admin are intentionally not implicit (the `changePassword`
+endpoint requires the old password). This preserves recovered Uptime states.
+
+Once logged in, the existing single-monitor/Telegram pilot runs as before.
+For completely unattended fresh deployment, supply Uptime credentials in HOME
+Task 05 before Task 36. Never run Task 05 with missing credentials expecting
+it to invent an admin password.
