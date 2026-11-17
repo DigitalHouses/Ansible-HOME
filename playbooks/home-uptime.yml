@@ -220,6 +220,31 @@
       changed_when: false
       failed_when: home36_socket_client.rc != 0 or 'SOCKET_IO_READY' not in home36_socket_client.stdout
 
+    - name: Allow ICMP echo sockets for only the dedicated Uptime service group
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ home_lxc_id }}"
+          - --
+          - sh
+          - -ec
+          - |
+            gid="$(id -g uptime-kuma)"
+            desired="$gid $gid"
+            path=/etc/sysctl.d/90-dh-uptime-icmp.conf
+            line="net.ipv4.ping_group_range = $desired"
+            if [ ! -f "$path" ] || [ "$(cat "$path")" != "$line" ]; then
+              printf '%s\n' "$line" > "$path"
+              echo CONFIG_CHANGED
+            fi
+            if [ "$(cat /proc/sys/net/ipv4/ping_group_range)" != "$desired" ]; then
+              printf '%s\n' "$desired" > /proc/sys/net/ipv4/ping_group_range
+              echo RUNTIME_CHANGED
+            fi
+      register: home36_icmp_policy
+      changed_when: "'CHANGED' in home36_icmp_policy.stdout"
+
     - name: Diagnose ICMP from dedicated Uptime service account
       ansible.builtin.command:
         argv:
@@ -241,6 +266,11 @@
       register: home36_icmp_probe
       changed_when: false
       failed_when: false
+
+    - name: Require working HOME PVE ICMP from the Uptime service user
+      ansible.builtin.assert:
+        that: home36_icmp_probe.rc == 0
+        fail_msg: HOME36_ICMP_UNAVAILABLE_FROM_SERVICE_ACCOUNT
 
     - name: Report safe HOME ICMP diagnostic
       ansible.builtin.debug:
