@@ -221,6 +221,39 @@
       changed_when: false
       no_log: true
 
+    - name: Inspect PVE automatic APT upgrades configuration (read-only)
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /bin/sh
+          - -c
+          - >-
+            printf 'UPGRADES_PKG='; dpkg-query -W '-f=${Status} ${Version}' unattended-upgrades 2>/dev/null || true;
+            printf '\nTIMERS='; systemctl is-enabled apt-daily.timer apt-daily-upgrade.timer 2>&1 | tr '\n' ',';
+            printf '\nPERIODIC='; apt-config dump | grep -E '^APT::Periodic::' | tr '\n' '|';
+            printf '\nORIGIN='; apt-config dump | grep -E '^Unattended-Upgrade::(Origins-Pattern|Allowed-Origins|Package-Whitelist|Package-Whitelist-Strict|Automatic-Reboot)' | tr '\n' '|';
+            printf '\nCONF_FILES='; ls /etc/apt/apt.conf.d/*unattended* /etc/apt/apt.conf.d/*auto-upgrades* 2>/dev/null | tr '\n' ',';
+            printf '\nCLOUDFLARED_POLICY='; apt-cache policy cloudflared | tr '\n' '|';
+            printf '\nRELEASE='; grep -E '^(Origin|Label|Suite|Codename):' /var/lib/apt/lists/*cloudflare*InRelease 2>/dev/null | tr '\n' '|';
+      register: cf70_uu_audit
+      changed_when: false
+      failed_when: false
+
+    - name: Report PVE APT auto-update baseline
+      ansible.builtin.debug:
+        msg: "{{ cf70_uu_audit.stdout }}"
+
     - name: Identify existing PVE connector token path without reading it
       ansible.builtin.set_fact:
         cf70_pve_token_path: >-
