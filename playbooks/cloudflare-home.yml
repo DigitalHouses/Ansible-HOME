@@ -221,6 +221,35 @@
       changed_when: false
       no_log: true
 
+    - name: Inspect HOME PVE cloudflared package installation without modifying it
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /usr/bin/dpkg-query
+          - -W
+          - '-f=${Version}'
+          - cloudflared
+      register: cf70_cloudflared_pkg
+      changed_when: false
+      failed_when: false
+
+    - name: Report HOME cloudflared automatic update capability without secrets
+      ansible.builtin.debug:
+        msg:
+          - "CF70_UPDATE_INSTALL={{ 'PACKAGE_MANAGER' if cf70_cloudflared_pkg.rc == 0 else 'STANDALONE_OR_UNKNOWN' }}"
+          - "CF70_UPDATE_NO_AUTOUPDATE_FLAG={{ '--no-autoupdate' in cf70_pve_unit.stdout }}"
+
     - name: Identify existing PVE connector token path without reading it
       ansible.builtin.set_fact:
         cf70_pve_token_path: >-
