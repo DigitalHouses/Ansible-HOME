@@ -29,7 +29,9 @@ function call(event, ...args) {
 socket.on('connect_error', () => finish('CONNECT_FAILED'));
 socket.on('disconnect', reason => { if (!started && reason !== 'io client disconnect') finish('DISCONNECTED'); });
 // Explicitly query first-run state. Never reset or overwrite an existing user.
-socket.on('connect', async () => {
+// Upstream emits loginRequired only AFTER registering all Socket.IO handlers.
+// The transport connect event fires earlier and can race needSetup registration.
+socket.on('loginRequired', async () => {
     try {
         authStage = 'NEED_SETUP';
         const requiresSetup = await new Promise((resolve, reject) => {
