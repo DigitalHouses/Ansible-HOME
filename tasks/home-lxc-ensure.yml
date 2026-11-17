@@ -14,6 +14,16 @@
       - "home_lxc_existing.rc != 0 or (('ip=' ~ home_lxc_ip ~ '/24') in home_lxc_existing.stdout)"
     fail_msg: "HOME_LXC_IDENTITY_CONFLICT_{{ home_lxc_id }}"
 
+- name: Require the declared resources on an existing HOME LXC
+  ansible.builtin.assert:
+    that:
+      - "('cores: ' ~ home_lxc_cores) in home_lxc_existing.stdout_lines"
+      - "('memory: ' ~ home_lxc_memory) in home_lxc_existing.stdout_lines"
+      - "('swap: ' ~ home_lxc_swap) in home_lxc_existing.stdout_lines"
+      - "home_lxc_existing.stdout is search('rootfs: .*size=' ~ home_lxc_disk_gb ~ 'G')"
+    fail_msg: "HOME_LXC_RESOURCES_MISMATCH_{{ home_lxc_id }}; refusing to resize an existing filesystem"
+  when: home_lxc_existing.rc == 0
+
 - name: Inspect existing Debian 13 LXC template
   ansible.builtin.command:
     argv: [pveam, list, local]
@@ -31,6 +41,7 @@
 - name: Refresh Debian template index if necessary
   ansible.builtin.command:
     argv: [pveam, update]
+  changed_when: true
   when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
 
 - name: Discover Debian 13 template if absent
@@ -53,6 +64,7 @@
       - download
       - local
       - "{{ (home_lxc_available.stdout_lines | select('search', 'debian-13-standard_') | list | sort | last).split()[1] }}"
+  changed_when: true
   when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
 
 - name: Resolve newly downloaded template
@@ -100,6 +112,7 @@
       - "1"
       - --onboot
       - "1"
+  changed_when: true
   when: home_lxc_existing.rc != 0
 
 - name: Read container runtime state
@@ -111,6 +124,7 @@
 - name: Start a stopped container
   ansible.builtin.command:
     argv: [pct, start, "{{ home_lxc_id }}"]
+  changed_when: true
   when: "'status: running' not in home_lxc_status.stdout"
 
 - name: Wait for guest execution to work

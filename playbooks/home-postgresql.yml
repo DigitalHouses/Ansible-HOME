@@ -52,11 +52,13 @@
     - name: Refresh apt index only for missing PostgreSQL
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, update]
+      changed_when: true
       when: "'install ok installed' not in home35_package.stdout"
 
     - name: Install PostgreSQL only when absent
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, postgresql]
+      changed_when: true
       when: "'install ok installed' not in home35_package.stdout"
 
     - name: Read installed PostgreSQL cluster
@@ -77,6 +79,10 @@
           - home35_pg_version | default('') is match('^[0-9]+$')
         fail_msg: HOME35_POSTGRES_CLUSTER_UNEXPECTED
 
+    - name: Define the minimal HOME PostgreSQL listener
+      ansible.builtin.set_fact:
+        home35_net_desired: "listen_addresses = 'localhost,{{ home_lxc_ip }}'\npassword_encryption = 'scram-sha-256'"
+
     - name: Read managed PostgreSQL network override
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, cat, "/etc/postgresql/{{ home35_pg_version }}/main/conf.d/90-dh-homeassistant.conf"]
@@ -84,11 +90,16 @@
       changed_when: false
       failed_when: false
 
+    - name: Detect a changed HOME PostgreSQL network listener
+      ansible.builtin.set_fact:
+        home35_net_diff: "{{ home35_net_config.stdout != home35_net_desired }}"
+
     - name: Configure database listener without rewriting other settings
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "cat > /etc/postgresql/{{ home35_pg_version }}/main/conf.d/90-dh-homeassistant.conf"]
-        stdin: "listen_addresses = 'localhost,{{ home_lxc_ip }}'\npassword_encryption = 'scram-sha-256'\n"
-      when: home35_net_config.stdout != "listen_addresses = 'localhost,{{ home_lxc_ip }}'\npassword_encryption = 'scram-sha-256'"
+        stdin: "{{ home35_net_desired }}\n"
+      changed_when: true
+      when: home35_net_diff
 
     - name: Check HOME-only PostgreSQL pg_hba rule
       ansible.builtin.command:
@@ -101,12 +112,21 @@
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "cat >> /etc/postgresql/{{ home35_pg_version }}/main/pg_hba.conf"]
         stdin: "\n# DH_HOME_HBA\nhost homeassistant postgres {{ home_lxc_ip.rsplit('.', 1)[0] }}.222/32 scram-sha-256\nhost homeassistant postgres {{ home_lxc_ip.rsplit('.', 1)[0] }}.237/32 scram-sha-256\n"
+      changed_when: true
       when: home35_hba.rc != 0
 
-    - name: Start PostgreSQL and reload changed network configuration
+    - name: Read PostgreSQL service state
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, is-active, postgresql]
+      register: home35_service
+      changed_when: false
+      failed_when: false
+
+    - name: Start or restart PostgreSQL only if necessary
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, restart, postgresql]
-      when: home35_hba.rc != 0 or home35_net_config.stdout != "listen_addresses = 'localhost,{{ home_lxc_ip }}'\npassword_encryption = 'scram-sha-256'"
+      changed_when: true
+      when: home35_hba.rc != 0 or home35_net_diff or home35_service.stdout | trim != 'active'
 
     - name: Require native PostgreSQL service readiness
       ansible.builtin.command:
@@ -127,6 +147,7 @@
     - name: Create UTF-8 homeassistant database only if absent
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, postgres, --, createdb, -E, UTF8, -T, template0, -O, postgres, homeassistant]
+      changed_when: true
       when: home35_database.stdout | trim == ''
 
     - name: Test saved postgres password via real TCP login
@@ -142,6 +163,7 @@
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, postgres, --, psql, -X, -v, ON_ERROR_STOP=1, -d, postgres]
         stdin: "ALTER ROLE postgres WITH PASSWORD '{{ DH_POSTGRES_PASSWORD | replace(\"'\", \"''\") }}';\n"
+      changed_when: true
       when: home35_auth.rc != 0
       no_log: true
 
