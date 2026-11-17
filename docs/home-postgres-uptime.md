@@ -35,13 +35,13 @@
 | --- | --- | --- |
 | HOME PVE | Ping (ICMP) | `<HOME subnet>.220` |
 | HOME PBS | Ping (ICMP) | `<HOME subnet>.223` |
-| HOME PostgreSQL | PostgreSQL | `<HOME subnet>.224:5432`, database `homeassistant`, user `postgres`, SQL `SELECT 1`; task 05 password |
+| HOME PostgreSQL | PostgreSQL | `<HOME subnet>.224:5432`, database `homeassistant`, user `postgres`, SQL `SELECT 1`; connection string `postgresql://postgres:<URL-encoded-task05-password>@<HOME subnet>.224:5432/homeassistant` |
 | HOME MQTT broker | TCP Port | `<HOME subnet>.222:1883` (broker port availability; not authenticated publish/subscribe) |
 | HOME Internet | HTTP(s) | `https://www.cloudflare.com/cdn-cgi/trace`, expected HTTP 200 |
 | HOME HAOS | Ping (ICMP) | `<HOME subnet>.222` |
 | HOME gateway | Ping (ICMP) | Read default gateway of HOME PVE (currently `192.168.11.1`) |
 
-Use 60-second intervals initially. Do not copy/overwrite Telegram notifiers
+Use 60-second intervals initially. Ping requires the guest `iputils-ping` package, installed by task 36. Do not copy/overwrite Telegram notifiers
 or existing monitor IDs. Preserve `kuma.db` and its companion SQLite files
 through every redeployment. No exposure of Uptime UI outside LAN is created
 by task 36.

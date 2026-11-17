@@ -41,7 +41,7 @@
 
     - name: Inspect required native packages
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}", nodejs, npm, git, curl]
+        argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}", nodejs, npm, git, curl, iputils-ping]
       register: home36_deps
       changed_when: false
       failed_when: false
@@ -52,9 +52,9 @@
       changed_when: true
       when: home36_deps.rc != 0
 
-    - name: Install Node.js, npm, Git and curl only when missing
+    - name: Install Node.js, npm, Git, curl and ping only when missing
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, nodejs, npm, git, curl]
+        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, nodejs, npm, git, curl, iputils-ping]
       changed_when: true
       when: home36_deps.rc != 0
 
