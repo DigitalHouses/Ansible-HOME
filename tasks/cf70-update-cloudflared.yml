@@ -1,0 +1,62 @@
+---
+# HOME only: package-managed Cloudflare Tunnel, same existing service and token.
+- name: Register the already approved HOME PVE
+  ansible.builtin.add_host:
+    name: cf70_package_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Require existing HOME cloudflared package
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Status}', cloudflared]
+  delegate_to: cf70_package_pve
+  register: cf70_pkg_state
+  changed_when: false
+  failed_when: cf70_pkg_state.rc != 0 or 'install ok installed' not in cf70_pkg_state.stdout
+
+- name: Upgrade only installed cloudflared from configured official APT sources
+  ansible.builtin.apt:
+    name: cloudflared
+    state: latest
+    only_upgrade: true
+    update_cache: true
+    cache_valid_time: 3600
+  delegate_to: cf70_package_pve
+  register: cf70_pkg_update
+
+- name: Restart HOME cloudflared after an actual package upgrade
+  ansible.builtin.systemd_service:
+    name: cloudflared.service
+    state: restarted
+  delegate_to: cf70_package_pve
+  when: cf70_pkg_update.changed
+
+- name: Require HOME connector service to be running
+  ansible.builtin.command:
+    argv: [systemctl, is-active, cloudflared.service]
+  delegate_to: cf70_package_pve
+  changed_when: false
+
+- name: Verify the existing Cloudflare Tunnel recovers after the package upgrade
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_pkg_tunnel
+  changed_when: false
+  until: cf70_pkg_tunnel.json.result.status == 'healthy'
+  retries: 12
+  delay: 5
+  no_log: true
+
+- name: Report native Cloudflare APT package maintenance
+  ansible.builtin.debug:
+    msg: "CF70_UPDATE_CLOUDFLARED=SUCCESS CHANGED={{ cf70_pkg_update.changed }} TUNNEL=HEALTHY"
