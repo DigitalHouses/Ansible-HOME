@@ -220,7 +220,7 @@
       changed_when: false
       failed_when: home36_socket_client.rc != 0 or 'SOCKET_IO_READY' not in home36_socket_client.stdout
 
-    - name: Allow ICMP echo sockets for only the dedicated Uptime service group
+    - name: Enable ICMP ping for all users inside HOME Uptime LXC
       ansible.builtin.command:
         argv:
           - pct
@@ -230,12 +230,11 @@
           - sh
           - -ec
           - |
-            gid="$(id -g uptime-kuma)"
-            desired="$gid $gid"
-            path=/etc/sysctl.d/90-dh-uptime-icmp.conf
+            desired="0 2147483647"
+            file=/etc/sysctl.d/90-dh-uptime-icmp.conf
             line="net.ipv4.ping_group_range = $desired"
-            if [ ! -f "$path" ] || [ "$(cat "$path")" != "$line" ]; then
-              printf '%s\n' "$line" > "$path"
+            if [ ! -f "$file" ] || [ "$(cat "$file")" != "$line" ]; then
+              printf '%s\n' "$line" > "$file"
               echo CONFIG_CHANGED
             fi
             if [ "$(cat /proc/sys/net/ipv4/ping_group_range)" != "$desired" ]; then
@@ -245,39 +244,10 @@
       register: home36_icmp_policy
       changed_when: "'CHANGED' in home36_icmp_policy.stdout"
 
-    - name: Diagnose ICMP from dedicated Uptime service account
+    - name: Verify PVE ping as Uptime Kuma user
       ansible.builtin.command:
-        argv:
-          - pct
-          - exec
-          - "{{ home_lxc_id }}"
-          - --
-          - runuser
-          - -u
-          - uptime-kuma
-          - --
-          - ping
-          - -n
-          - -c
-          - "2"
-          - -W
-          - "2"
-          - "{{ home_lxc_ip.rsplit('.', 1)[0] ~ '.220' }}"
-      register: home36_icmp_probe
+        argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, uptime-kuma, --, ping, -n, -c, "1", -W, "2", "{{ home_lxc_ip.rsplit('.', 1)[0] ~ '.220' }}"]
       changed_when: false
-      failed_when: false
-
-    - name: Require working HOME PVE ICMP from the Uptime service user
-      ansible.builtin.assert:
-        that: home36_icmp_probe.rc == 0
-        fail_msg: HOME36_ICMP_UNAVAILABLE_FROM_SERVICE_ACCOUNT
-
-    - name: Report safe HOME ICMP diagnostic
-      ansible.builtin.debug:
-        msg: >-
-          HOME36_ICMP rc={{ home36_icmp_probe.rc }}
-          stdout={{ home36_icmp_probe.stdout | trim }}
-          stderr={{ home36_icmp_probe.stderr | trim }}
 
     - name: Pilot — create only HOME PVE monitor and optional Telegram via authenticated Socket.IO
       ansible.builtin.command:
