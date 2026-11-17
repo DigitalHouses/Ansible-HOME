@@ -237,7 +237,7 @@
               printf '%s\n' "$line" > "$file"
               echo CONFIG_CHANGED
             fi
-            if [ "$(cat /proc/sys/net/ipv4/ping_group_range)" != "$desired" ]; then
+            if [ "$(awk '{print $1 " " $2}' /proc/sys/net/ipv4/ping_group_range)" != "$desired" ]; then
               printf '%s\n' "$desired" > /proc/sys/net/ipv4/ping_group_range
               echo RUNTIME_CHANGED
             fi
