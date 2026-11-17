@@ -1,0 +1,97 @@
+---
+# HOME PVE: official Debian APT daily mechanism; no Semaphore schedule or custom timer.
+- name: Reuse only the approved existing HOME PVE
+  ansible.builtin.add_host:
+    name: cf70_unattended_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Confirm HOME cloudflared is installed through APT
+  ansible.builtin.command:
+    argv: [dpkg-query, -W, '-f=${Status}', cloudflared]
+  delegate_to: cf70_unattended_pve
+  register: cf70_auto_pkg
+  changed_when: false
+  failed_when: cf70_auto_pkg.rc != 0 or 'install ok installed' not in cf70_auto_pkg.stdout
+
+- name: Restrict Debian unattended-upgrades to only cloudflared from Cloudflare
+  ansible.builtin.copy:
+    dest: /etc/apt/apt.conf.d/90-dh-cloudflared-unattended
+    owner: root
+    group: root
+    mode: '0644'
+    content: |
+      // HOME: use existing Debian APT timers, never upgrade PVE packages automatically.
+      #clear Unattended-Upgrade::Allowed-Origins;
+      #clear Unattended-Upgrade::Origins-Pattern;
+      #clear Unattended-Upgrade::Package-Whitelist;
+      Unattended-Upgrade::Origins-Pattern {
+          "origin=cloudflared,site=pkg.cloudflare.com";
+      };
+      Unattended-Upgrade::Package-Whitelist {
+          "^cloudflared$";
+      };
+      Unattended-Upgrade::Package-Whitelist-Strict "true";
+      Unattended-Upgrade::Automatic-Reboot "false";
+      Unattended-Upgrade::Remove-Unused-Dependencies "false";
+      Unattended-Upgrade::Remove-New-Unused-Dependencies "false";
+      Unattended-Upgrade::Remove-Unused-Kernel-Packages "false";
+      APT::Periodic::Update-Package-Lists "1";
+      APT::Periodic::Unattended-Upgrade "1";
+      // After a package replacement, restart only cloudflared if its process
+      // still runs the removed executable. No restart on unrelated APT changes.
+      DPkg::Post-Invoke {
+          "/bin/sh -c 'p=$(systemctl show --property=MainPID --value cloudflared.service 2>/dev/null); if test ${p:-0} -gt 0 && readlink /proc/$p/exe 2>/dev/null | grep -q deleted; then systemctl try-restart cloudflared.service; fi'";
+      };
+  delegate_to: cf70_unattended_pve
+
+- name: Install the official Debian unattended-upgrades package
+  ansible.builtin.apt:
+    name: unattended-upgrades
+    state: present
+    update_cache: true
+  delegate_to: cf70_unattended_pve
+
+- name: Enable existing Debian APT maintenance timers
+  ansible.builtin.systemd_service:
+    name: "{{ item }}"
+    enabled: true
+    state: started
+  loop: [apt-daily.timer, apt-daily-upgrade.timer]
+  delegate_to: cf70_unattended_pve
+
+- name: Inspect effective APT policy
+  ansible.builtin.command:
+    argv: [apt-config, dump]
+  delegate_to: cf70_unattended_pve
+  register: cf70_auto_config
+  changed_when: false
+
+- name: Ensure only cloudflared is allowed and automatic reboot is prohibited
+  ansible.builtin.assert:
+    that:
+      - "'Unattended-Upgrade::Package-Whitelist-Strict \"true\";' in cf70_auto_config.stdout"
+      - "'Unattended-Upgrade::Automatic-Reboot \"false\";' in cf70_auto_config.stdout"
+      - "'APT::Periodic::Unattended-Upgrade \"1\";' in cf70_auto_config.stdout"
+      - "'APT::Periodic::Update-Package-Lists \"1\";' in cf70_auto_config.stdout"
+      - "'origin=cloudflared,site=pkg.cloudflare.com' in cf70_auto_config.stdout"
+      - "'^cloudflared$' in cf70_auto_config.stdout"
+    fail_msg: CF70_CLOUDFLARED_AUTOUPDATE_APT_POLICY_NOT_APPLIED
+
+- name: Verify unattended-upgrades policy with upstream dry-run
+  ansible.builtin.command:
+    argv: [timeout, '180', unattended-upgrade, --dry-run, --debug]
+  delegate_to: cf70_unattended_pve
+  changed_when: false
+  no_log: true
+
+- name: Report configured native APT auto-updates
+  ansible.builtin.debug:
+    msg: CF70_AUTOUPDATE=UNATTENDED_UPGRADES CLOUDFLARED_ONLY REBOOT=DISABLED

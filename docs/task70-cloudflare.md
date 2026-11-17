@@ -20,8 +20,29 @@
 | **publish_semaphore** | Только маршрут `<site-id>-pve-semaphore.digitalhouses.vip` → HTTP Semaphore Runner, порт 80 |
 | **publish_webmin** | Только маршрут `<site-id>-pve-mediaserver-admin.digitalhouses.vip` → HTTPS Webmin, порт 10000; IP из приватного media-манифеста |
 | **publish_pbs_private** | Private CIDR `<media-ip>/32` → существующий Tunnel на HOME PVE; без публичного PBS hostname, без изменений CORE |
+| **update_cloudflared** | Разово обновить только установленный пакет через официальный Cloudflare APT |
+| **configure_cloudflared_auto** | Включить штатные автообновления Debian только для `cloudflared` |
 
 Публикация выполняется только после проверки origin и действующего ограниченного Access. Существующая CNAME-запись меняет только целевой UUID; другие DNS, маршруты, Access-политики и приложения не изменяются. Если маршрут уже правильно настроен, изменений нет. Любой конфликт чужого DNS или origin — остановка, без пересоздания.
+
+## Автоматические обновления `cloudflared` (HOME PVE)
+
+Один раз запустить №70 с `configure_cloudflared_auto`. Ansible устанавливает
+официальный Debian `unattended-upgrades` и один файл
+`/etc/apt/apt.conf.d/90-dh-cloudflared-unattended`:
+
+- APT использует существующие `apt-daily.timer` и `apt-daily-upgrade.timer`;
+  расписаний Semaphore и дополнительных таймеров на PVE нет.
+- Разрешён **только пакет `cloudflared`** из `pkg.cloudflare.com`;
+  остальные Debian/Proxmox/ядро не обновляются автоматически.
+- Автоматическая перезагрузка PVE и автоматическое удаление зависимостей
+  выключены. После замены исполняемого файла штатный APT hook перезапускает
+  только устаревшую службу `cloudflared`, если пакет не сделал это сам.
+- После применения задача выполняет `unattended-upgrade --dry-run --debug`
+  и проверяет эффективную политику APT; дальнейшие запуски идемпотентны.
+
+Сам Tunnel, токен, Cloudflare Access, маршруты и CORE не меняются.
+Краткое переподключение Tunnel при обновлении возможно.
 
 ## Приёмка на serzhan-home
 
