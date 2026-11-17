@@ -1,0 +1,88 @@
+---
+# HOME only: keep existing Cloudflare tunnel, token-file and ExecStart arguments.
+- name: Require existing standalone Cloudflare connector
+  ansible.builtin.assert:
+    that:
+      - cf70_pve_connector.stdout | trim == 'active'
+      - cf70_cloudflared_pkg.rc != 0
+      - cf70_pve_token_path | length > 0
+    fail_msg: CF70_NATIVE_AUTOUPDATE_REQUIRES_STANDALONE_PVE_CONNECTOR
+
+- name: Register only the approved existing HOME PVE
+  ansible.builtin.add_host:
+    name: cf70_autoupdate_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      -o ConnectTimeout=7
+  changed_when: false
+
+- name: Read existing HOME PVE cloudflared systemd unit path
+  ansible.builtin.command:
+    argv: [systemctl, show, '--property=FragmentPath', '--value', cloudflared.service]
+  delegate_to: cf70_autoupdate_pve
+  register: cf70_unit_path
+  changed_when: false
+
+- name: Require existing HOME cloudflared service file
+  ansible.builtin.assert:
+    that:
+      - cf70_unit_path.stdout | trim is match('^/etc/systemd/system/cloudflared[.]service$')
+    fail_msg: CF70_CLOUDFLARED_UNIT_NOT_LOCALLY_MANAGED
+
+- name: Refuse package-manager cloudflared marker
+  ansible.builtin.stat:
+    path: /usr/local/etc/cloudflared/.installedFromPackageManager
+  delegate_to: cf70_autoupdate_pve
+  register: cf70_package_marker
+
+- name: Require standalone binary installation
+  ansible.builtin.assert:
+    that: not cf70_package_marker.stat.exists
+    fail_msg: CF70_BUILTIN_AUTOUPDATE_NOT_SUPPORTED_FOR_PACKAGE_INSTALL
+
+- name: Enable upstream cloudflared native automatic updates by removing disabling flag
+  ansible.builtin.replace:
+    path: "{{ cf70_unit_path.stdout | trim }}"
+    regexp: '(?m)^(ExecStart=[^\n]*?)\s+--no-autoupdate(?=\s|$)'
+    replace: '\1'
+  delegate_to: cf70_autoupdate_pve
+  register: cf70_autoupdate_unit
+
+- name: Reload systemd and restart only if the cloudflared unit changed
+  ansible.builtin.systemd_service:
+    name: cloudflared.service
+    daemon_reload: true
+    state: restarted
+  delegate_to: cf70_autoupdate_pve
+  when: cf70_autoupdate_unit.changed
+
+- name: Read effective HOME cloudflared service arguments without displaying token path
+  ansible.builtin.command:
+    argv: [systemctl, show, '--property=ExecStart', '--value', cloudflared.service]
+  delegate_to: cf70_autoupdate_pve
+  register: cf70_autoupdate_exec
+  changed_when: false
+  no_log: true
+
+- name: Verify native auto-update is enabled and HOME connector is running
+  ansible.builtin.assert:
+    that:
+      - "'--no-autoupdate' not in cf70_autoupdate_exec.stdout"
+    fail_msg: CF70_CLOUDFLARED_AUTOUPDATE_FLAG_STILL_DISABLED
+  no_log: true
+
+- name: Read current cloudflared service status
+  ansible.builtin.command:
+    argv: [systemctl, is-active, cloudflared.service]
+  delegate_to: cf70_autoupdate_pve
+  changed_when: false
+
+- name: Report HOME cloudflared native auto-update status
+  ansible.builtin.debug:
+    msg: "CF70_AUTOUPDATE=NATIVE_ENABLED CHANGED={{ cf70_autoupdate_unit.changed }}"
