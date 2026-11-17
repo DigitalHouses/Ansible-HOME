@@ -1,0 +1,181 @@
+---
+- name: "35 | Identify HOME PVE for PostgreSQL"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files: [/etc/digitalhouses/pve.yml]
+  tasks:
+    - name: Require HOME identity and saved PostgreSQL password
+      ansible.builtin.assert:
+        that:
+          - (pve.ipv4.split('.') | last | int) == 220
+          - DH_POSTGRES_PASSWORD | default('', true) | length >= 8
+        fail_msg: HOME35_PVE_IDENTITY_OR_TASK05_POSTGRES_PASSWORD_MISSING
+      no_log: true
+
+    - name: Register the existing HOME PVE
+      ansible.builtin.add_host:
+        name: home35_pve
+        groups: home35_managed
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        home_lxc_id: "1224"
+        home_lxc_hostname: "{{ 'postgresql-' ~ (lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim) }}"
+        home_lxc_ip: "{{ pve.ipv4.rsplit('.', 1)[0] ~ '.224' }}"
+        home_lxc_cores: "2"
+        home_lxc_memory: "512"
+        home_lxc_swap: "512"
+        home_lxc_disk_gb: "100"
+      changed_when: false
+
+- name: "35 | Create PostgreSQL LXC only when absent; preserve databases"
+  hosts: home35_managed
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Ensure the dedicated PostgreSQL container
+      ansible.builtin.include_tasks: ../tasks/home-lxc-ensure.yml
+
+    - name: Check PostgreSQL package installation in the guest
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}", postgresql]
+      register: home35_package
+      changed_when: false
+      failed_when: false
+
+    - name: Refresh apt index only for missing PostgreSQL
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, update]
+      changed_when: true
+      when: "'install ok installed' not in home35_package.stdout"
+
+    - name: Install PostgreSQL only when absent
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, postgresql]
+      changed_when: true
+      when: "'install ok installed' not in home35_package.stdout"
+
+    - name: Read installed PostgreSQL cluster
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, pg_lsclusters, --no-header]
+      register: home35_clusters
+      changed_when: false
+
+    - name: Select native Debian PostgreSQL cluster
+      ansible.builtin.set_fact:
+        home35_pg_version: "{{ home35_clusters.stdout_lines[0].split()[0] }}"
+      when: home35_clusters.stdout_lines | length == 1
+
+    - name: Require exactly one PostgreSQL cluster
+      ansible.builtin.assert:
+        that:
+          - home35_clusters.stdout_lines | length == 1
+          - home35_pg_version | default('') is match('^[0-9]+$')
+        fail_msg: HOME35_POSTGRES_CLUSTER_UNEXPECTED
+
+    - name: Define the minimal HOME PostgreSQL listener
+      ansible.builtin.set_fact:
+        home35_net_desired: "listen_addresses = 'localhost,{{ home_lxc_ip }}'\npassword_encryption = 'scram-sha-256'"
+
+    - name: Read managed PostgreSQL network override
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, cat, "/etc/postgresql/{{ home35_pg_version }}/main/conf.d/90-dh-homeassistant.conf"]
+      register: home35_net_config
+      changed_when: false
+      failed_when: false
+
+    - name: Detect a changed HOME PostgreSQL network listener
+      ansible.builtin.set_fact:
+        home35_net_diff: "{{ home35_net_config.stdout != home35_net_desired }}"
+
+    - name: Configure database listener without rewriting other settings
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "cat > /etc/postgresql/{{ home35_pg_version }}/main/conf.d/90-dh-homeassistant.conf"]
+        stdin: "{{ home35_net_desired }}\n"
+      changed_when: true
+      when: home35_net_diff
+
+    - name: Check HOME-only PostgreSQL pg_hba rule
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, grep, -Fxq, "# DH_HOME_HBA", "/etc/postgresql/{{ home35_pg_version }}/main/pg_hba.conf"]
+      register: home35_hba
+      changed_when: false
+      failed_when: false
+
+    - name: Allow only HAOS and HOME Uptime to authenticate to the dedicated DB
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "cat >> /etc/postgresql/{{ home35_pg_version }}/main/pg_hba.conf"]
+        stdin: "\n# DH_HOME_HBA\nhost homeassistant postgres {{ home_lxc_ip.rsplit('.', 1)[0] }}.222/32 scram-sha-256\nhost homeassistant postgres {{ home_lxc_ip.rsplit('.', 1)[0] }}.237/32 scram-sha-256\n"
+      changed_when: true
+      when: home35_hba.rc != 0
+
+    - name: Read PostgreSQL service state
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, is-active, postgresql]
+      register: home35_service
+      changed_when: false
+      failed_when: false
+
+    - name: Start or restart PostgreSQL only if necessary
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, restart, postgresql]
+      changed_when: true
+      when: home35_hba.rc != 0 or home35_net_diff or home35_service.stdout | trim != 'active'
+
+    - name: Require native PostgreSQL service readiness
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, pg_isready, -h, "{{ home_lxc_ip }}", -p, "5432"]
+      changed_when: false
+
+    - name: Check existing Home Assistant database encoding
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, postgres, --, psql, -X, -tA, -d, postgres, -c, "SELECT pg_encoding_to_char(encoding) FROM pg_database WHERE datname='homeassistant';"]
+      register: home35_database
+      changed_when: false
+
+    - name: Refuse to modify any existing non-UTF8 database
+      ansible.builtin.assert:
+        that: home35_database.stdout | trim in ['', 'UTF8']
+        fail_msg: HOME35_EXISTING_HOMEASSISTANT_DB_NOT_UTF8
+
+    - name: Create UTF-8 homeassistant database only if absent
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, postgres, --, createdb, -E, UTF8, -T, template0, -O, postgres, homeassistant]
+      changed_when: true
+      when: home35_database.stdout | trim == ''
+
+    - name: Test saved postgres password via real TCP login
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql -w -X -q -tA -h 127.0.0.1 -U postgres -d postgres -c 'SELECT 1'"]
+        stdin: "{{ DH_POSTGRES_PASSWORD }}\n"
+      register: home35_auth
+      changed_when: false
+      failed_when: false
+      no_log: true
+
+    - name: Set postgres password from task 05 only when login fails
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, postgres, --, psql, -X, -v, ON_ERROR_STOP=1, -d, postgres]
+        stdin: "ALTER ROLE postgres WITH PASSWORD '{{ DH_POSTGRES_PASSWORD | replace(\"'\", \"''\") }}';\n"
+      changed_when: true
+      when: home35_auth.rc != 0
+      no_log: true
+
+    - name: Verify database encoding and postgres password after convergence
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "IFS= read -r PGPASSWORD; export PGPASSWORD; exec psql -w -X -q -tA -h 127.0.0.1 -U postgres -d homeassistant -c 'SHOW server_encoding'"]
+        stdin: "{{ DH_POSTGRES_PASSWORD }}\n"
+      register: home35_accept
+      changed_when: false
+      failed_when: "home35_accept.rc != 0 or home35_accept.stdout | trim != 'UTF8'"
+      no_log: true
+
+    - name: Report HOME PostgreSQL readiness
+      ansible.builtin.debug:
+        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres"

@@ -1,0 +1,137 @@
+---
+# Shared HOME-only PVE LXC creation. Never replace an existing CTID.
+- name: Inspect assigned LXC
+  ansible.builtin.command:
+    argv: [pct, config, "{{ home_lxc_id }}"]
+  register: home_lxc_existing
+  changed_when: false
+  failed_when: false
+
+- name: Refuse a foreign guest at the assigned CTID
+  ansible.builtin.assert:
+    that:
+      - "home_lxc_existing.rc != 0 or ('hostname: ' ~ home_lxc_hostname) in home_lxc_existing.stdout_lines"
+      - "home_lxc_existing.rc != 0 or (('ip=' ~ home_lxc_ip ~ '/24') in home_lxc_existing.stdout)"
+    fail_msg: "HOME_LXC_IDENTITY_CONFLICT_{{ home_lxc_id }}"
+
+- name: Require the declared resources on an existing HOME LXC
+  ansible.builtin.assert:
+    that:
+      - "('cores: ' ~ home_lxc_cores) in home_lxc_existing.stdout_lines"
+      - "('memory: ' ~ home_lxc_memory) in home_lxc_existing.stdout_lines"
+      - "('swap: ' ~ home_lxc_swap) in home_lxc_existing.stdout_lines"
+      - "home_lxc_existing.stdout is search('rootfs: .*size=' ~ home_lxc_disk_gb ~ 'G')"
+    fail_msg: "HOME_LXC_RESOURCES_MISMATCH_{{ home_lxc_id }}; refusing to resize an existing filesystem"
+  when: home_lxc_existing.rc == 0
+
+- name: Inspect existing Debian 13 LXC template
+  ansible.builtin.command:
+    argv: [pveam, list, local]
+  register: home_lxc_templates
+  changed_when: false
+  when: home_lxc_existing.rc != 0
+
+- name: Select cached template or empty
+  ansible.builtin.set_fact:
+    home_lxc_template: >-
+      {{ ((home_lxc_templates.stdout_lines | select('search', 'debian-13-standard_') | list | sort | last).split()[0])
+         if (home_lxc_templates.stdout_lines | select('search', 'debian-13-standard_') | list | length > 0) else '' }}
+  when: home_lxc_existing.rc != 0
+
+- name: Refresh Debian template index if necessary
+  ansible.builtin.command:
+    argv: [pveam, update]
+  changed_when: true
+  when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
+
+- name: Discover Debian 13 template if absent
+  ansible.builtin.command:
+    argv: [pveam, available, --section, system]
+  register: home_lxc_available
+  changed_when: false
+  when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
+
+- name: Require Debian 13 in the official template index
+  ansible.builtin.assert:
+    that: home_lxc_available.stdout_lines | select('search', 'debian-13-standard_') | list | length > 0
+    fail_msg: HOME_DEBIAN13_TEMPLATE_UNAVAILABLE
+  when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
+
+- name: Download the missing Debian 13 template
+  ansible.builtin.command:
+    argv:
+      - pveam
+      - download
+      - local
+      - "{{ (home_lxc_available.stdout_lines | select('search', 'debian-13-standard_') | list | sort | last).split()[1] }}"
+  changed_when: true
+  when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
+
+- name: Resolve newly downloaded template
+  ansible.builtin.set_fact:
+    home_lxc_template: >-
+      {{ 'local:vztmpl/' ~ (home_lxc_available.stdout_lines | select('search', 'debian-13-standard_') | list | sort | last).split()[1] }}
+  when: home_lxc_existing.rc != 0 and home_lxc_template | length == 0
+
+- name: Read the existing HOME PVE gateway
+  ansible.builtin.command:
+    argv: [ip, -4, route, show, default]
+  register: home_lxc_gateway
+  changed_when: false
+  when: home_lxc_existing.rc != 0
+
+- name: Require valid PVE gateway for fresh LXC
+  ansible.builtin.assert:
+    that:
+      - home_lxc_gateway.stdout is search('default via [0-9.]+ dev ')
+    fail_msg: HOME_LXC_DEFAULT_GATEWAY_MISSING
+  when: home_lxc_existing.rc != 0
+
+- name: Create only the missing LXC, leaving other guests untouched
+  ansible.builtin.command:
+    argv:
+      - pct
+      - create
+      - "{{ home_lxc_id }}"
+      - "{{ home_lxc_template }}"
+      - --hostname
+      - "{{ home_lxc_hostname }}"
+      - --ostype
+      - debian
+      - --cores
+      - "{{ home_lxc_cores }}"
+      - --memory
+      - "{{ home_lxc_memory }}"
+      - --swap
+      - "{{ home_lxc_swap }}"
+      - --rootfs
+      - "local-lvm:{{ home_lxc_disk_gb }}"
+      - --net0
+      - "name=eth0,bridge=vmbr0,ip={{ home_lxc_ip }}/24,gw={{ (home_lxc_gateway.stdout | regex_search('default via ([0-9.]+)', '\\1')) | first }}"
+      - --unprivileged
+      - "1"
+      - --onboot
+      - "1"
+  changed_when: true
+  when: home_lxc_existing.rc != 0
+
+- name: Read container runtime state
+  ansible.builtin.command:
+    argv: [pct, status, "{{ home_lxc_id }}"]
+  register: home_lxc_status
+  changed_when: false
+
+- name: Start a stopped container
+  ansible.builtin.command:
+    argv: [pct, start, "{{ home_lxc_id }}"]
+  changed_when: true
+  when: "'status: running' not in home_lxc_status.stdout"
+
+- name: Wait for guest execution to work
+  ansible.builtin.command:
+    argv: [pct, exec, "{{ home_lxc_id }}", --, /bin/true]
+  register: home_lxc_ready
+  changed_when: false
+  until: home_lxc_ready.rc == 0
+  retries: 12
+  delay: 5
