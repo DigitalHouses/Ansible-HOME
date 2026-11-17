@@ -1,0 +1,152 @@
+---
+- name: "36 | Identify HOME PVE for Uptime Kuma"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files: [/etc/digitalhouses/pve.yml]
+  tasks:
+    - name: Require HOME PVE identity
+      ansible.builtin.assert:
+        that: (pve.ipv4.split('.') | last | int) == 220
+        fail_msg: HOME36_PVE_IDENTITY_MISMATCH
+
+    - name: Register only existing HOME PVE
+      ansible.builtin.add_host:
+        name: home36_pve
+        groups: home36_managed
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        home_lxc_id: "1237"
+        home_lxc_hostname: "{{ 'uptime-' ~ (lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim) }}"
+        home_lxc_ip: "{{ pve.ipv4.rsplit('.', 1)[0] ~ '.237' }}"
+        home_lxc_cores: "1"
+        home_lxc_memory: "1024"
+        home_lxc_swap: "512"
+        home_lxc_disk_gb: "12"
+      changed_when: false
+
+- name: "36 | Create HOME Uptime Kuma only when absent; preserve monitoring database"
+  hosts: home36_managed
+  gather_facts: false
+  become: true
+  tasks:
+    - name: Ensure dedicated Uptime LXC
+      ansible.builtin.include_tasks: ../tasks/home-lxc-ensure.yml
+
+    - name: Inspect required native packages
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}", nodejs, npm, git, curl]
+      register: home36_deps
+      changed_when: false
+      failed_when: false
+
+    - name: Refresh apt index when prerequisites are missing
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, update]
+      when: home36_deps.rc != 0
+
+    - name: Install Node.js, npm, Git and curl only when missing
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, nodejs, npm, git, curl]
+      when: home36_deps.rc != 0
+
+    - name: Check existing Uptime Kuma source directory
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, test, -f, /opt/uptime-kuma/server/server.js]
+      register: home36_source
+      changed_when: false
+      failed_when: false
+
+    - name: Create dedicated Uptime account when absent
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, useradd, --system, --user-group, --home-dir, /var/lib/uptime-kuma, --shell, /usr/sbin/nologin, uptime-kuma]
+      args:
+        creates: /THIS_FILE_IS_NOT_PRESENT
+      when: home36_source.rc != 0
+      # A fresh guest is used; a repeated run will skip source installation.
+
+    - name: Create persistent Uptime state directory on first install
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, install, -d, -o, uptime-kuma, -g, uptime-kuma, -m, "0750", /var/lib/uptime-kuma]
+      when: home36_source.rc != 0
+
+    - name: Clone pinned official Uptime Kuma v2 source only if missing
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, git, clone, --depth, "1", --branch, "2.5.11", https://github.com/louislam/uptime-kuma.git, /opt/uptime-kuma]
+      when: home36_source.rc != 0
+
+    - name: Give the dedicated service account its application files
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, chown, -R, uptime-kuma:uptime-kuma, /opt/uptime-kuma]
+      when: home36_source.rc != 0
+
+    - name: Run official upstream setup on first installation only
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, uptime-kuma, --, sh, -c, "cd /opt/uptime-kuma && npm run setup"]
+      when: home36_source.rc != 0
+
+    - name: Inspect existing native Uptime Kuma systemd unit
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, cat, /etc/systemd/system/uptime-kuma.service]
+      register: home36_unit
+      changed_when: false
+      failed_when: false
+
+    - name: Install native systemd unit if absent
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, sh, -c, "cat > /etc/systemd/system/uptime-kuma.service"]
+        stdin: |
+          [Unit]
+          Description=Uptime Kuma HOME
+          After=network-online.target
+          Wants=network-online.target
+          [Service]
+          Type=simple
+          User=uptime-kuma
+          Group=uptime-kuma
+          WorkingDirectory=/opt/uptime-kuma
+          Environment=NODE_ENV=production
+          Environment=DATA_DIR=/var/lib/uptime-kuma/data
+          Environment=UPTIME_KUMA_HOST=0.0.0.0
+          Environment=UPTIME_KUMA_PORT=3001
+          ExecStart=/usr/bin/node /opt/uptime-kuma/server/server.js
+          Restart=on-failure
+          [Install]
+          WantedBy=multi-user.target
+      when: home36_unit.rc != 0
+
+    - name: Reload systemd only when installing unit
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, daemon-reload]
+      when: home36_unit.rc != 0
+
+    - name: Inspect Uptime Kuma service state
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, is-active, uptime-kuma]
+      register: home36_active
+      changed_when: false
+      failed_when: false
+
+    - name: Start and enable Uptime Kuma when needed
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, enable, --now, uptime-kuma]
+      when: home36_active.stdout | trim != 'active' or home36_unit.rc != 0
+
+    - name: Verify local authenticated-ready Uptime Kuma web server
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, curl, -s, -o, /dev/null, -w, "%{http_code}", http://127.0.0.1:3001/]
+      register: home36_http
+      changed_when: false
+      until: home36_http.rc == 0 and home36_http.stdout in ['200', '302']
+      retries: 12
+      delay: 5
+
+    - name: Report server readiness without claiming monitors were provisioned
+      ansible.builtin.debug:
+        msg: "HOME36=SERVICE_READY http://{{ home_lxc_ip }}:3001; MONITORS=CONFIGURE_ONCE_IN_UPSTREAM_UI; state preserved after setup"
