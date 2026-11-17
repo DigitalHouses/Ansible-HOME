@@ -20,7 +20,7 @@
     - name: Require safe read-only task 70 mode and site credentials
       ansible.builtin.assert:
         that:
-          - cf70_action in ['audit', 'migrate', 'publish_semaphore', 'publish_webmin', 'publish_pbs_private']
+          - cf70_action in ['audit', 'migrate', 'publish_semaphore', 'publish_webmin', 'publish_pbs_private', 'enable_autoupdate']
           - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - cf70_token | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -349,6 +349,10 @@
     - name: Publish only the HOME PBS private host route through the existing PVE Tunnel
       ansible.builtin.include_tasks: ../tasks/cf70-pbs-private.yml
       when: cf70_action == 'publish_pbs_private'
+
+    - name: Enable native auto-update only on the existing HOME PVE cloudflared connector
+      ansible.builtin.include_tasks: ../tasks/cf70-enable-autoupdate.yml
+      when: cf70_action == 'enable_autoupdate'
 
     - name: Enroll HOME PVE and Media VM for outbound path read-only audit
       ansible.builtin.add_host:

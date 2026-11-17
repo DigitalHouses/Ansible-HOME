@@ -148,6 +148,7 @@ tasks:
           - {name: "Опубликовать Semaphore через существующий Tunnel", value: publish_semaphore}
           - {name: "Опубликовать Webmin через существующий Tunnel", value: publish_webmin}
           - {name: "Опубликовать приватный PBS /32 через существующий Tunnel", value: publish_pbs_private}
+          - {name: "Включить штатное автообновление cloudflared на PVE", value: enable_autoupdate}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"
