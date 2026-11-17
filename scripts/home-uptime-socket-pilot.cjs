@@ -1,4 +1,4 @@
-// Pilot for pinned Uptime Kuma v2.5.11. `cfg` arrives via protected stdin,
+// HOME monitor provisioning for pinned Uptime Kuma v2.5.11. `cfg` arrives via protected stdin,
 // never as command arguments or a file on the Uptime guest.
 'use strict';
 const { io } = require('socket.io-client');
@@ -86,24 +86,44 @@ async function maybeRun() {
         } else if (cfg.telegramBotToken || cfg.telegramChatID) {
             return finish('TELEGRAM_PAIR_INCOMPLETE');
         }
-        const name = 'HOME PVE';
-        const current = monitors.find(m => m.name === name);
-        if (current) {
-            if (current.type !== 'ping' || current.hostname !== cfg.pveIP) {
-                return finish('MONITOR_NAME_CONFLICT');
-            }
-            // Preserve existing monitor; do not silently change notification bindings.
-            const linked = notificationID === null || !!current.notificationIDList?.[notificationID];
-            finish(`ACCOUNT=${accountStatus} MONITOR=EXISTING ID=${current.id} TELEGRAM=${telegramStatus} LINKED=${linked}`, 0);
-        }
-        const monitor = {
-            name, type: 'ping', hostname: cfg.pveIP, active: true,
-            interval: 60, retryInterval: 60, resendInterval: 0, maxretries: 0,
-            accepted_statuscodes: ['200-299'], notificationIDList: notificationID ? { [notificationID]: true } : {},
-            kafkaProducerBrokers: [], kafkaProducerSaslOptions: {}, rabbitmqNodes: [], conditions: []
+        const base = {
+            active: true, interval: 60, retryInterval: 60, resendInterval: 0,
+            maxretries: 0, accepted_statuscodes: ['200-299'],
+            kafkaProducerBrokers: [], kafkaProducerSaslOptions: {},
+            rabbitmqNodes: [], conditions: []
         };
-        const result = await call('add', monitor);
-        finish(`ACCOUNT=${accountStatus} MONITOR=CREATED ID=${result.monitorID} TELEGRAM=${telegramStatus} LINKED=${notificationID !== null}`, 0);
+        const targets = [
+            { name: 'HOME PVE', type: 'ping', hostname: cfg.pveIP },
+            { name: 'HOME PBS', type: 'ping', hostname: cfg.pbsIP },
+            { name: 'HOME MQTT broker', type: 'port', hostname: cfg.haosIP, port: 1883 },
+            { name: 'HOME Internet', type: 'http', url: 'https://www.cloudflare.com/cdn-cgi/trace', method: 'GET', accepted_statuscodes: ['200'] },
+            { name: 'HOME HAOS', type: 'ping', hostname: cfg.haosIP },
+            { name: 'HOME gateway', type: 'ping', hostname: cfg.gatewayIP }
+        ];
+        if (cfg.postgresPassword) {
+            targets.push({
+                name: 'HOME PostgreSQL', type: 'postgres',
+                databaseConnectionString: `postgres://postgres:${encodeURIComponent(cfg.postgresPassword)}@${cfg.postgresIP}:5432/homeassistant`,
+                databaseQuery: 'SELECT 1'
+            });
+        }
+        let created = 0;
+        let existing = 0;
+        for (const target of targets) {
+            const current = monitors.find(m => m.name === target.name);
+            if (current) {
+                existing++;
+                continue;
+            }
+            const monitor = {
+                ...base, ...target,
+                notificationIDList: notificationID ? { [notificationID]: true } : {}
+            };
+            await call('add', monitor);
+            created++;
+        }
+        const postgres = cfg.postgresPassword ? 'CONFIGURED' : 'WAITING_TASK05';
+        finish(`ACCOUNT=${accountStatus} MONITOR=${created ? 'CREATED' : 'EXISTING'} CREATED=${created} EXISTING=${existing} POSTGRES=${postgres} TELEGRAM=${telegramStatus}`, 0);
     } catch (e) {
         // Never print remote exception messages: some HTTP libraries include tokens in their errors.
         finish(e.message.startsWith('SOCKET_TIMEOUT_') ? 'SOCKET_TIMEOUT' : 'API_OPERATION_FAILED');

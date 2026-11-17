@@ -249,7 +249,13 @@
         argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, uptime-kuma, --, ping, -n, -c, "1", -W, "2", "{{ home_lxc_ip.rsplit('.', 1)[0] ~ '.220' }}"]
       changed_when: false
 
-    - name: Pilot — create only HOME PVE monitor and optional Telegram via authenticated Socket.IO
+    - name: Read HOME PVE default gateway for Router monitor
+      ansible.builtin.command:
+        argv: [sh, -c, "ip -4 route show default | awk '{print $3; exit}'"]
+      register: home36_gateway
+      changed_when: false
+
+    - name: Configure HOME monitors and Telegram with Socket.IO
       ansible.builtin.command:
         argv:
           - pct
@@ -260,7 +266,7 @@
           - -lc
           - "cd /opt/uptime-kuma && node -"
         stdin: |-
-          const cfg = {{ {'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220'} | to_json }};
+          const cfg = {{ {'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
           {{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/home-uptime-socket-pilot.cjs') }}
       register: home36_socket_pilot
       failed_when: false
@@ -270,12 +276,12 @@
         - DH_UPTIME_ADMIN_PASSWORD | default('', true) | length > 0
       no_log: true
 
-    - name: Report pilot result without secrets
+    - name: Report HOME monitor provisioning result
       ansible.builtin.debug:
         msg: "{{ home36_socket_pilot.stdout | trim }}"
       when: home36_socket_pilot is not skipped
 
-    - name: Stop on unsuccessful Socket.IO pilot with a sanitized result
+    - name: Stop on unsuccessful Socket.IO provisioning with a sanitized result
       ansible.builtin.fail:
         msg: "{{ home36_socket_pilot.stdout | default('HOME_KUMA_PILOT_NO_OUTPUT') | trim }}"
       when:
@@ -284,4 +290,4 @@
 
     - name: Report server readiness without claiming monitors were provisioned
       ansible.builtin.debug:
-        msg: "HOME36=SERVICE_READY http://{{ home_lxc_ip }}:3001; Socket.IO pilot runs only when admin credentials are set in task 05"
+        msg: "HOME36=SERVICE_READY http://{{ home_lxc_ip }}:3001; Socket.IO monitor setup runs with admin credentials from task 05"
