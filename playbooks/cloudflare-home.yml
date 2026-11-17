@@ -244,11 +244,34 @@
       changed_when: false
       failed_when: false
 
+    - name: Inspect HOME PVE cloudflared binary ownership and package source
+      ansible.builtin.command:
+        argv:
+          - /usr/bin/ssh
+          - -i
+          - /var/lib/semaphore/.ssh/id_ed25519
+          - -o
+          - BatchMode=yes
+          - -o
+          - StrictHostKeyChecking=yes
+          - -o
+          - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+          - -o
+          - ConnectTimeout=5
+          - "root@{{ pve.ipv4 }}"
+          - /bin/sh
+          - -c
+          - 'b=$(command -v cloudflared); echo BINARY=$b; dpkg-query -S "$b" 2>/dev/null || true; apt-cache policy cloudflared 2>/dev/null | head -12'
+      register: cf70_cloudflared_origin
+      changed_when: false
+      failed_when: false
+
     - name: Report HOME cloudflared automatic update capability without secrets
       ansible.builtin.debug:
         msg:
           - "CF70_UPDATE_INSTALL={{ 'PACKAGE_MANAGER' if cf70_cloudflared_pkg.rc == 0 else 'STANDALONE_OR_UNKNOWN' }}"
           - "CF70_UPDATE_NO_AUTOUPDATE_FLAG={{ '--no-autoupdate' in cf70_pve_unit.stdout }}"
+          - "CF70_UPDATE_SOURCE={{ cf70_cloudflared_origin.stdout_lines | default([]) }}"
 
     - name: Identify existing PVE connector token path without reading it
       ansible.builtin.set_fact:
