@@ -1,0 +1,161 @@
+---
+# Reuse the existing mTLS hostname, certificate, Access Bypass, WAF, DNS and Tunnel.
+- name: Select previously deployed HAOS mTLS WAF and certificate
+  ansible.builtin.set_fact:
+    cf70_ha_waf_rules: >-
+      {{ cf70_ha_waf.json.result.rules | default([])
+         | selectattr('action', 'equalto', 'block')
+         | selectattr('expression', 'search', '\\*-ha-mtls[.]digitalhouses[.]vip') | list }}
+    cf70_ha_cert_matches: >-
+      {{ cf70_ha_certs.json.result | default([])
+         | selectattr('common_name', 'equalto', cf70_ha_name)
+         | selectattr('status', 'equalto', 'active') | list }}
+
+- name: Refuse HAOS publication unless existing edge mTLS is in place
+  ansible.builtin.assert:
+    that:
+      - cf70_tunnel.status == 'healthy'
+      - cf70_pve_connector.stdout | trim == 'active'
+      - cf70_ha_waf.status == 200
+      - cf70_ha_waf_rules | length == 1
+      - cf70_ha_waf_rules[0].enabled | default(true) | bool
+      - "'not cf.tls_client_auth.cert_verified' in cf70_ha_waf_rules[0].expression"
+      - "'cf.tls_client_auth.cert_revoked' in cf70_ha_waf_rules[0].expression"
+      - "'cf.tls_client_auth.cert_subject_dn_rfc2253' in cf70_ha_waf_rules[0].expression"
+      - "'lower(http.host)' in cf70_ha_waf_rules[0].expression"
+      - cf70_ha_certs.status == 200
+      - cf70_ha_cert_matches | length == 1
+      - cf70_ha_apps | length == 1
+      - cf70_ha_access_policies.status == 200
+      - cf70_ha_access_policies.json.result | length == 1
+      - cf70_ha_access_policies.json.result[0].decision == 'bypass'
+      - cf70_ha_ingress | length <= 1
+      - cf70_ha_ingress | length == 0 or cf70_ha_ingress[0].service == 'http://' ~ cf70_ha_ip ~ ':80'
+      - cf70_ha_dns.json.result | length == 1
+      - cf70_ha_dns.json.result[0].type == 'CNAME'
+      - cf70_ha_dns.json.result[0].proxied | bool
+      - cf70_ha_dns.json.result[0].content is match('^[0-9a-f-]{36}[.]cfargotunnel[.]com$')
+    fail_msg: HA70_MTLS_PROTECTION_NOT_CONFIRMED_NO_PUBLICATION
+
+- name: Confirm the existing HAOS HTTP origin responds on port 80
+  ansible.builtin.uri:
+    url: "http://{{ cf70_ha_ip }}:80/"
+    status_code: 200
+    use_proxy: false
+    timeout: 10
+  changed_when: false
+
+- name: Prepare the only new HAOS ingress rule
+  ansible.builtin.set_fact:
+    cf70_ha_entry:
+      hostname: "{{ cf70_ha_name }}"
+      service: "http://{{ cf70_ha_ip }}:80"
+    cf70_ha_original_cfg: "{{ cf70_config.json.result.config }}"
+
+- name: Build existing Tunnel ingress with only the missing HAOS entry
+  ansible.builtin.set_fact:
+    cf70_ha_next_ingress: >-
+      {{ cf70_ha_original_cfg.ingress[:-1] + [cf70_ha_entry] + [cf70_ha_original_cfg.ingress[-1]]
+         if cf70_ha_ingress | length == 0 else cf70_ha_original_cfg.ingress }}
+
+- name: Recheck shared Tunnel configuration before change
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_ha_before_write
+  changed_when: false
+  no_log: true
+
+- name: Stop if another task changed shared Tunnel ingress
+  ansible.builtin.assert:
+    that:
+      - cf70_ha_before_write.json.result.config == cf70_ha_original_cfg
+    fail_msg: HA70_CONCURRENT_SHARED_TUNNEL_CHANGE
+
+- name: Publish one HAOS ingress in the existing HOME Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    method: PUT
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      config: "{{ cf70_ha_original_cfg | combine({'ingress': cf70_ha_next_ingress}) }}"
+    use_proxy: false
+    status_code: 200
+  when: cf70_ha_ingress | length == 0
+  changed_when: true
+  no_log: true
+
+- name: Redirect only the previous HAOS CNAME to the existing HOME Tunnel
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records/{{ cf70_ha_dns.json.result[0].id }}"
+    method: PUT
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      type: CNAME
+      name: "{{ cf70_ha_name }}"
+      content: "{{ cf70_tunnel.id }}.cfargotunnel.com"
+      ttl: 1
+      proxied: true
+    use_proxy: false
+    status_code: 200
+  when: cf70_ha_dns.json.result[0].content | lower != (cf70_tunnel.id ~ '.cfargotunnel.com') | lower
+  changed_when: true
+  no_log: true
+
+- name: Read final HOME Tunnel ingress
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_ha_final_cfg
+  changed_when: false
+  no_log: true
+
+- name: Read final HAOS hostname DNS
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records?name={{ cf70_ha_name }}&per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_ha_final_dns
+  changed_when: false
+  no_log: true
+
+- name: Verify route and DNS point only to the existing HOME services
+  ansible.builtin.assert:
+    that:
+      - cf70_ha_final_cfg.json.result.config.ingress == cf70_ha_next_ingress
+      - cf70_ha_final_dns.json.result | length == 1
+      - cf70_ha_final_dns.json.result[0].content | lower == (cf70_tunnel.id ~ '.cfargotunnel.com') | lower
+      - cf70_ha_final_dns.json.result[0].proxied | bool
+    fail_msg: HA70_ROUTE_OR_DNS_READBACK_FAILED
+
+- name: Confirm unauthenticated external HAOS requests are blocked by WAF
+  ansible.builtin.uri:
+    url: "https://{{ cf70_ha_name }}/api/"
+    use_proxy: false
+    validate_certs: true
+    follow_redirects: none
+    status_code: 403
+    timeout: 15
+  register: cf70_ha_nocert_check
+  until: cf70_ha_nocert_check.status | default(0) == 403
+  retries: 5
+  delay: 3
+  changed_when: false
+
+- name: Report existing HAOS mTLS route and security controls
+  ansible.builtin.debug:
+    msg:
+      - "HA70_URL=https://{{ cf70_ha_name }}"
+      - "HA70_ORIGIN=http://{{ cf70_ha_ip }}:80"
+      - "HA70_TUNNEL={{ cf70_tunnel.id }}"
+      - HA70_WAF_MTLS=ENFORCED
+      - HA70_ACCESS=EXISTING_BYPASS
+      - HA70_NO_CLIENT_CERT=HTTP_403
+      - HA70_CERTIFICATE=REUSED

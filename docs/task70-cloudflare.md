@@ -96,3 +96,21 @@ Private route `192.168.11.223/32` пока оставляем как legacy бе
 - **Private PBS — выполнено в №70:** `CORE → Cloudflare → существующий HOME PVE connector → HOME PBS VM:8007`. Для `serzhan-home`: `192.168.11.223/32`, **Cloudflare route ID `eebd7ec3-e1dd-46eb-95e7-9f6a85f16905`**, Tunnel UUID `6a04d9cd-0b17-48f3-8366-9f86ea08cb24`. IP получен из приватного media-манифеста; PBS с PVE отвечает HTTP 200. Действие `publish_pbs_private` проверяет статус существующего коннектора, origin и конфликты маршрутов и создаёт только отсутствующий CIDR через `POST /teamnet/routes`. `GET` Cloudflare API подтвердил route ID, CIDR и Tunnel UUID; повторный запуск `changed=0`. **Проверку реального транспорта через Cloudflare One Client/WARP выполняет Ansible-CORE №40**, HOME не претендует на сквозной сетевой тест. Новых DNS, Access-приложений, Tunnel и сервисов не создавалось; CORE не изменялся.
 - Если потребуются новые маршруты PVE/File Browser для других домов, их добавление должно быть отдельным выбором в №70, без использования исторической №15.
 - Центральный PBS, Sync Jobs и хранение резервных копий — **Ansible-CORE**, не HOME.
+
+## HAOS mTLS на HOME `.222` (18.11.2026)
+
+Действия №70: `audit_ha_mtls` (только чтение), `publish_ha_mtls` (идемпотентная публикация).
+Существующий hostname `serzhan-home-pve-ha-mtls.digitalhouses.vip` используется повторно.
+Сохраняются действующие Cloudflare Managed CA сертификат (CN строго равен hostname),
+WAF `block` при отсутствующем/отозванном сертификате или неверном CN,
+Access Exact Host `bypass`, единственный Tunnel `serzhan-home`, старые PVE маршруты.
+Публикация добавляет только ingress `http://192.168.11.222:80` до 404
+и переводит только старый CNAME этого hostname на UUID текущего Tunnel.
+Нет нового Tunnel, сертификатов, служб или ручных изменений CORE.
+
+**Особенность HAOS:** обратный прокси добавляет `X-Forwarded-For`;
+пока Home Assistant на `.222` отвечает HTTP 400 на такой заголовок.
+Для корректной работы через Tunnel требуется разрешить доверенный обратный прокси
+`192.168.11.220` в настройках HTTP Home Assistant (`use_x_forwarded_for`,
+`trusted_proxies`) и повторить положительный mTLS-тест с клиентским сертификатом.
+Без сертификата WAF должен возвращать HTTP 403 на любом этапе.
