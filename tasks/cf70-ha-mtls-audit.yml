@@ -69,3 +69,28 @@
       - "HA70_CERT_NAMES={{ cf70_ha_certs.json.result | map(attribute='common_name') | list if cf70_ha_certs.status == 200 else 'UNKNOWN' }}"
       - "HA70_CERT_EXPIRES={{ cf70_ha_certs.json.result | map(attribute='expires_on') | list if cf70_ha_certs.status == 200 else 'UNKNOWN' }}"
       - "HA70_CERT_STATUS={{ cf70_ha_certs.json.result | map(attribute='status') | list if cf70_ha_certs.status == 200 else 'UNKNOWN' }}"
+
+- name: Check former HAOS mTLS client certificate kit on HOME PVE without reading keys
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ssh
+      - -i
+      - /var/lib/semaphore/.ssh/id_ed25519
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      - -o
+      - ConnectTimeout=5
+      - "root@{{ pve.ipv4 }}"
+      - /bin/sh
+      - -c
+      - 'test -s /root/digitalhouses/delivery/serzhan-home/for-clients/serzhan-home-standard.p12 && echo CERT_PRESENT || echo CERT_NOT_PRESENT; qm agent 2222 ping >/dev/null 2>&1 && echo HAOS_QGA_READY || echo HAOS_QGA_UNAVAILABLE'
+  register: cf70_ha_cert_presence
+  changed_when: false
+
+- name: Report mTLS client-kit and HAOS guest agent availability
+  ansible.builtin.debug:
+    msg: "{{ cf70_ha_cert_presence.stdout_lines }}"
