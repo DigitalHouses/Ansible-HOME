@@ -1,0 +1,50 @@
+---
+- name: Identify existing HAOS mTLS hostname and origin
+  ansible.builtin.set_fact:
+    cf70_ha_name: "{{ site_id }}-pve-ha-mtls.{{ cf70_zone_name }}"
+    cf70_ha_ip: "{{ pve.ipv4.rsplit('.', 1)[0] ~ '.222' }}"
+
+- name: Select existing HAOS ingress and exact Access application
+  ansible.builtin.set_fact:
+    cf70_ha_ingress: "{{ cf70_config.json.result.config.ingress | selectattr('hostname','defined') | selectattr('hostname','equalto',cf70_ha_name) | list }}"
+    cf70_ha_apps: "{{ cf70_access.json.result | selectattr('domain','defined') | selectattr('domain','equalto',cf70_ha_name) | list }}"
+
+- name: Read current WAF rules for mTLS hostname
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/rulesets/phases/http_request_firewall_custom/entrypoint"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: [200, 403, 404]
+  register: cf70_ha_waf
+  changed_when: false
+  no_log: true
+
+- name: Read only HAOS DNS record metadata
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/dns_records?name={{ cf70_ha_name }}&per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_ha_dns
+  changed_when: false
+  no_log: true
+
+- name: Read existing client certificate metadata
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/client_certificates?per_page=100"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: [200, 403]
+  register: cf70_ha_certs
+  changed_when: false
+  no_log: true
+
+- name: Report existing HAOS mTLS edge protection
+  ansible.builtin.debug:
+    msg:
+      - "HA70_NAME={{ cf70_ha_name }} TARGET=http://{{ cf70_ha_ip }}:80"
+      - "HA70_INGRESS={{ cf70_ha_ingress | map(attribute='service') | list }}"
+      - "HA70_DNS={{ cf70_ha_dns.json.result | map(attribute='type') | list }}"
+      - "HA70_EXACT_ACCESS={{ cf70_ha_apps | map(attribute='id') | list }}"
+      - "HA70_WAF_HTTP={{ cf70_ha_waf.status }} WAF={{ (cf70_ha_waf.json.result.rules | default([])) | map(attribute='expression') | list if cf70_ha_waf.status == 200 else 'UNREADABLE' }}"
+      - "HA70_CERT_HTTP={{ cf70_ha_certs.status }} COUNT={{ (cf70_ha_certs.json.result | length) if cf70_ha_certs.status == 200 else 'UNREADABLE' }}"

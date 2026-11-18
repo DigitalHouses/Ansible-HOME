@@ -150,6 +150,7 @@ tasks:
           - {name: "Опубликовать приватный PBS /32 через существующий Tunnel", value: publish_pbs_private}
           - {name: "Обновить только cloudflared через APT на PVE", value: update_cloudflared}
           - {name: "Включить автообновление только cloudflared через Debian APT", value: configure_cloudflared_auto}
+          - {name: "HAOS mTLS — проверить существующую защиту", value: audit_ha_mtls}
   - name: "30-Медиасервер"
     playbook: playbooks/media-server-deploy.yml
     description: "Аудит либо установка медиасервера; действия с VM и SATA-диском выбираются отдельно"
