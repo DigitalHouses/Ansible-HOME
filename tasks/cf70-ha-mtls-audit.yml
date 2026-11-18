@@ -110,7 +110,8 @@
       - -o
       - ConnectTimeout=5
       - "root@{{ pve.ipv4 }}"
-      - 'qm guest exec 2222 -- /bin/ls -l /mnt/data/supervisor/homeassistant/configuration.yaml'
+      - >-
+        qm guest exec 2222 -- /bin/sh -c 'grep -nE "^(http:|[[:space:]]*use_x_forwarded_for:|[[:space:]]*trusted_proxies:)" /mnt/data/supervisor/homeassistant/configuration.yaml || :; command -v ha || :'
   register: cf70_haos_guest_probe
   changed_when: false
   failed_when: false
