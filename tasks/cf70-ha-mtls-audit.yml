@@ -110,14 +110,7 @@
       - -o
       - ConnectTimeout=5
       - "root@{{ pve.ipv4 }}"
-      - qm
-      - guest
-      - exec
-      - '2222'
-      - --
-      - /bin/sh
-      - -c
-      - 'echo OS=$(cat /etc/hostname); for f in /mnt/data/supervisor/homeassistant/configuration.yaml /config/configuration.yaml /mnt/data/supervisor/homeassistant; do if test -e "$f"; then echo PRESENT:$f; fi; done; if command -v ha >/dev/null; then echo HA_CLI=YES; else echo HA_CLI=NO; fi'
+      - 'qm guest exec 2222 -- /bin/ls -l /mnt/data/supervisor/homeassistant/configuration.yaml'
   register: cf70_haos_guest_probe
   changed_when: false
   failed_when: false
