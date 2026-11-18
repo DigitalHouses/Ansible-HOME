@@ -337,6 +337,10 @@
       ansible.builtin.include_tasks: ../tasks/cf70-ha-mtls-publish.yml
       when: cf70_action == 'publish_ha_mtls'
 
+    - name: Enable HAOS trust for the existing HOME mTLS Tunnel reverse proxy
+      ansible.builtin.include_tasks: ../tasks/cf70-haos-proxy.yml
+      when: cf70_action == 'publish_ha_mtls'
+
     - name: Enroll HOME PVE and Media VM for outbound path read-only audit
       ansible.builtin.add_host:
         name: "{{ item.name }}"

@@ -1,0 +1,133 @@
+---
+# HAOS is a VM on HOME PVE, accessible through its existing QEMU guest agent.
+- name: Reuse trusted HOME PVE for HAOS configuration
+  ansible.builtin.add_host:
+    name: cf70_haos_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Inspect existing HAOS HTTP proxy configuration without printing secrets
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - '2222'
+      - --
+      - /bin/sh
+      - -c
+      - |
+        f=/mnt/data/supervisor/homeassistant/configuration.yaml
+        if grep -q '^http:' "$f"; then
+          if grep -q '^  use_x_forwarded_for: true$' "$f" && grep -q '^    - {{ pve.ipv4 }}$' "$f"; then
+            echo READY
+          else
+            echo CONFLICT
+          fi
+        else
+          echo MISSING
+        fi
+  register: cf70_ha_proxy_state
+  delegate_to: cf70_haos_pve
+  changed_when: false
+  failed_when: (cf70_ha_proxy_state.stdout | from_json).exitcode != 0
+
+- name: Preserve existing Home Assistant HTTP configuration if already customized
+  ansible.builtin.assert:
+    that:
+      - "'CONFLICT' not in (cf70_ha_proxy_state.stdout | from_json)['out-data']"
+    fail_msg: HA70_EXISTING_HTTP_CONFIG_REQUIRES_SEPARATE_CHANGE
+
+- name: Append narrow HOME PVE trusted-proxy settings to HAOS only if missing
+  ansible.builtin.command:
+    argv:
+      - qm
+      - guest
+      - exec
+      - '2222'
+      - --
+      - /bin/sh
+      - -ec
+      - |
+        f=/mnt/data/supervisor/homeassistant/configuration.yaml
+        test -f "$f"
+        ! grep -q '^http:' "$f"
+        cp -p "$f" "$f.before-dh-mtls"
+        chmod 0600 "$f.before-dh-mtls"
+        printf '\nhttp:\n  use_x_forwarded_for: true\n  trusted_proxies:\n    - {{ pve.ipv4 }}\n' >> "$f"
+        echo CONFIG_UPDATED
+  delegate_to: cf70_haos_pve
+  register: cf70_ha_proxy_write
+  changed_when: true
+  failed_when: (cf70_ha_proxy_write.stdout | from_json).exitcode != 0
+  when: "'MISSING' in (cf70_ha_proxy_state.stdout | from_json)['out-data']"
+
+- name: Validate edited HAOS configuration before restarting Home Assistant
+  when: cf70_ha_proxy_write is changed
+  block:
+    - name: Run native Home Assistant configuration check
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, check]
+      register: cf70_ha_proxy_check
+      delegate_to: cf70_haos_pve
+      changed_when: false
+      failed_when: (cf70_ha_proxy_check.stdout | from_json).exitcode != 0
+      no_log: true
+  rescue:
+    - name: Restore the original HAOS configuration after failed validation
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - '2222'
+          - --
+          - /bin/sh
+          - -ec
+          - 'f=/mnt/data/supervisor/homeassistant/configuration.yaml; cp -p "$f.before-dh-mtls" "$f"'
+      delegate_to: cf70_haos_pve
+      changed_when: true
+      no_log: true
+
+    - name: Abort invalid Home Assistant proxy configuration
+      ansible.builtin.fail:
+        msg: HA70_HTTP_PROXY_CONFIG_INVALID_ROLLED_BACK
+
+- name: Restart only HAOS Core when trusted proxy settings were added
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, restart]
+  delegate_to: cf70_haos_pve
+  register: cf70_ha_proxy_restart
+  changed_when: true
+  failed_when: (cf70_ha_proxy_restart.stdout | from_json).exitcode != 0
+  when: cf70_ha_proxy_write is changed
+  no_log: true
+
+- name: Confirm HAOS accepts forwarded client IP from the actual HOME PVE only
+  ansible.builtin.uri:
+    url: "http://{{ cf70_ha_ip }}:80/"
+    headers:
+      Host: "{{ cf70_ha_name }}"
+      X-Forwarded-For: 203.0.113.10
+      X-Forwarded-Proto: https
+    use_proxy: false
+    status_code: [200, 400, 502, 503]
+    timeout: 5
+  delegate_to: cf70_haos_pve
+  register: cf70_ha_proxy_http
+  until: cf70_ha_proxy_http.status == 200
+  retries: 18
+  delay: 5
+  changed_when: false
+  failed_when: cf70_ha_proxy_http.status != 200
+
+- name: Report trusted reverse proxy for the existing mTLS HOME Tunnel
+  ansible.builtin.debug:
+    msg: "HA70_HAOS_TRUSTED_PROXY={{ pve.ipv4 }} HTTP_WITH_FORWARDED_FOR=200"
