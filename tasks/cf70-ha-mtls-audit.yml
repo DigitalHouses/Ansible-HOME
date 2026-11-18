@@ -48,3 +48,24 @@
       - "HA70_EXACT_ACCESS={{ cf70_ha_apps | map(attribute='id') | list }}"
       - "HA70_WAF_HTTP={{ cf70_ha_waf.status }} WAF={{ (cf70_ha_waf.json.result.rules | default([])) | map(attribute='expression') | list if cf70_ha_waf.status == 200 else 'UNREADABLE' }}"
       - "HA70_CERT_HTTP={{ cf70_ha_certs.status }} COUNT={{ (cf70_ha_certs.json.result | length) if cf70_ha_certs.status == 200 else 'UNREADABLE' }}"
+
+- name: Read exact HAOS Access application policies
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/access/apps/{{ cf70_ha_apps[0].id }}/policies"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: [200, 403]
+  register: cf70_ha_access_policies
+  changed_when: false
+  no_log: true
+  when: cf70_ha_apps | length == 1
+
+- name: Report only HAOS host certificate and routing metadata
+  ansible.builtin.debug:
+    msg:
+      - "HA70_TUNNEL={{ cf70_tunnel.id }}"
+      - "HA70_DNS_CNAME={{ cf70_ha_dns.json.result | selectattr('type', 'equalto', 'CNAME') | map(attribute='content') | list }}"
+      - "HA70_ACCESS_DECISIONS={{ cf70_ha_access_policies.json.result | map(attribute='decision') | list if cf70_ha_access_policies is not skipped and cf70_ha_access_policies.status == 200 else 'UNKNOWN' }}"
+      - "HA70_CERT_NAMES={{ cf70_ha_certs.json.result | map(attribute='common_name') | list if cf70_ha_certs.status == 200 else 'UNKNOWN' }}"
+      - "HA70_CERT_EXPIRES={{ cf70_ha_certs.json.result | map(attribute='expires_on') | list if cf70_ha_certs.status == 200 else 'UNKNOWN' }}"
+      - "HA70_CERT_STATUS={{ cf70_ha_certs.json.result | map(attribute='status') | list if cf70_ha_certs.status == 200 else 'UNKNOWN' }}"
