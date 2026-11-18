@@ -106,7 +106,7 @@
   delegate_to: cf70_haos_pve
   register: cf70_ha_proxy_restart
   changed_when: true
-  failed_when: (cf70_ha_proxy_restart.stdout | from_json).exitcode != 0
+  failed_when: cf70_ha_proxy_restart.rc != 0
   when: cf70_ha_proxy_write is changed
   no_log: true
 
