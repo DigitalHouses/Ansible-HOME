@@ -100,14 +100,40 @@
       ansible.builtin.fail:
         msg: HA70_HTTP_PROXY_CONFIG_INVALID_ROLLED_BACK
 
-- name: Restart only HAOS Core when trusted proxy settings were added
+- name: Check if running HAOS Core already accepts the configured trusted proxy
+  ansible.builtin.uri:
+    url: "http://{{ cf70_ha_ip }}:80/"
+    headers:
+      Host: "{{ cf70_ha_name }}"
+      X-Forwarded-For: 203.0.113.10
+      X-Forwarded-Proto: https
+    use_proxy: false
+    status_code: [200, 400]
+    timeout: 5
+  delegate_to: cf70_haos_pve
+  register: cf70_ha_proxy_current_http
+  changed_when: false
+
+- name: Check existing HAOS configuration before applying missing Core restart
+  ansible.builtin.command:
+    argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, check]
+  register: cf70_ha_proxy_existing_check
+  delegate_to: cf70_haos_pve
+  changed_when: false
+  failed_when: (cf70_ha_proxy_existing_check.stdout | from_json).exitcode != 0
+  no_log: true
+  when:
+    - cf70_ha_proxy_write is not changed
+    - cf70_ha_proxy_current_http.status == 400
+
+- name: Restart only HAOS Core when configured proxy trust is not yet active
   ansible.builtin.command:
     argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, restart]
   delegate_to: cf70_haos_pve
   register: cf70_ha_proxy_restart
   changed_when: true
   failed_when: cf70_ha_proxy_restart.rc != 0
-  when: cf70_ha_proxy_write is changed
+  when: cf70_ha_proxy_write is changed or cf70_ha_proxy_current_http.status == 400
   no_log: true
 
 - name: Confirm HAOS accepts forwarded client IP from the actual HOME PVE only
