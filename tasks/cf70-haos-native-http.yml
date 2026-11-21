@@ -1,0 +1,197 @@
+---
+# HAOS Core 2026.8+ ignores migrated http: YAML; edit its native store
+# only with Core stopped, preserving all unrelated settings.
+- name: Reuse the existing HOME PVE QEMU Guest Agent transport
+  ansible.builtin.add_host:
+    name: cf70_haos_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Require confirmed migrated HAOS HTTP store without pending UI changes
+  ansible.builtin.assert:
+    that:
+      - cf70_ha_http_native_data is defined
+      - cf70_ha_http_native_data.yaml_migration_done | bool
+      - cf70_ha_http_native_data.pending is none
+      - cf70_ha_http_native_data.stable is mapping
+    fail_msg: HA70_HTTP_NATIVE_STORE_NOT_READY
+
+- name: Reuse all active HAOS HTTP settings and add only the HOME PVE address
+  ansible.builtin.set_fact:
+    cf70_native_http_original: >-
+      {{ (cf70_ha_http_native.stdout | from_json)['out-data'] | from_json }}
+    cf70_native_http_proxy: "{{ pve.ipv4 ~ '/32' }}"
+  no_log: true
+
+- name: Prepare exact native HTTP config update without replacing other proxies
+  ansible.builtin.set_fact:
+    cf70_native_http_new_stable: >-
+      {{ cf70_native_http_original.data.stable |
+         combine({
+           'use_x_forwarded_for': true,
+           'trusted_proxies': ((cf70_native_http_original.data.stable.trusted_proxies | default([]))
+             + [cf70_native_http_proxy]) | unique | list
+         }) }}
+  no_log: true
+
+- name: Prepare full HTTP storage object preserving all other settings
+  ansible.builtin.set_fact:
+    cf70_native_http_updated: >-
+      {{ cf70_native_http_original |
+         combine({'data': cf70_native_http_original.data |
+         combine({'stable': cf70_native_http_new_stable})}) }}
+  no_log: true
+
+- name: Stop Core, update its native HTTP store, and restart if necessary
+  when: cf70_native_http_updated != cf70_native_http_original
+  block:
+    - name: Stop only HAOS Core before changing its native HTTP settings
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, stop]
+      delegate_to: cf70_haos_pve
+      register: cf70_native_http_stop
+      changed_when: true
+      failed_when: cf70_native_http_stop.rc != 0
+
+    - name: Wait until HAOS Core is stopped before editing the store
+      ansible.builtin.wait_for:
+        host: "{{ cf70_ha_ip }}"
+        port: 80
+        state: stopped
+        timeout: 90
+      delegate_to: cf70_haos_pve
+
+    - name: Back up and atomically replace only HAOS native HTTP storage
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - '2222'
+          - --
+          - /bin/sh
+          - -ec
+          - |
+            f=/mnt/data/supervisor/homeassistant/.storage/http
+            test -s "$f"
+            cp -p "$f" "$f.before-dh-mtls"
+            cp -p "$f" "$f.dh-new"
+            printf '%s' '{{ cf70_native_http_updated | to_json | b64encode }}' | base64 -d > "$f.dh-new"
+            test -s "$f.dh-new"
+            mv "$f.dh-new" "$f"
+      delegate_to: cf70_haos_pve
+      register: cf70_native_http_write
+      changed_when: true
+      failed_when: >-
+        cf70_native_http_write.rc != 0 or
+        (cf70_native_http_write.stdout | from_json).exitcode | default(1) != 0
+      no_log: true
+
+    - name: Start only HAOS Core with its updated HTTP settings
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, start]
+      delegate_to: cf70_haos_pve
+      register: cf70_native_http_start
+      changed_when: true
+      failed_when: cf70_native_http_start.rc != 0
+
+    - name: Wait for Home Assistant to become available
+      ansible.builtin.wait_for:
+        host: "{{ cf70_ha_ip }}"
+        port: 80
+        state: started
+        timeout: 150
+      delegate_to: cf70_haos_pve
+
+    - name: Verify HAOS accepts forwarded client requests from HOME PVE
+      ansible.builtin.uri:
+        url: "http://{{ cf70_ha_ip }}:80/"
+        headers:
+          Host: "{{ cf70_ha_name }}"
+          X-Forwarded-For: 203.0.113.10
+          X-Forwarded-Proto: https
+        status_code: [200, 400, 502, 503]
+        timeout: 5
+        use_proxy: false
+      delegate_to: cf70_haos_pve
+      register: cf70_native_http_test
+      until: cf70_native_http_test.status == 200
+      retries: 24
+      delay: 5
+      changed_when: false
+      failed_when: cf70_native_http_test.status != 200
+  rescue:
+    - name: Stop HAOS Core before restoring the original HTTP settings
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, stop]
+      delegate_to: cf70_haos_pve
+      failed_when: false
+      changed_when: true
+
+    - name: Confirm Core is stopped for rollback
+      ansible.builtin.wait_for:
+        host: "{{ cf70_ha_ip }}"
+        port: 80
+        state: stopped
+        timeout: 90
+      delegate_to: cf70_haos_pve
+
+    - name: Restore original native HTTP settings from local HAOS backup
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - '2222'
+          - --
+          - /bin/sh
+          - -ec
+          - |
+            f=/mnt/data/supervisor/homeassistant/.storage/http
+            test -s "$f.before-dh-mtls"
+            cp -p "$f.before-dh-mtls" "$f"
+      delegate_to: cf70_haos_pve
+      changed_when: true
+      no_log: true
+
+    - name: Restart HAOS Core with original HTTP settings
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --, /usr/bin/ha, core, start]
+      delegate_to: cf70_haos_pve
+      changed_when: true
+
+    - name: Ensure normal HAOS HTTP recovers after rollback
+      ansible.builtin.wait_for:
+        host: "{{ cf70_ha_ip }}"
+        port: 80
+        state: started
+        timeout: 150
+      delegate_to: cf70_haos_pve
+
+    - name: Stop with an explicit rollback result
+      ansible.builtin.fail:
+        msg: HA70_NATIVE_HTTP_CONFIG_NOT_APPLIED_ROLLED_BACK
+
+- name: Verify current HAOS Core accepts forwarded requests without further restarts
+  ansible.builtin.uri:
+    url: "http://{{ cf70_ha_ip }}:80/"
+    headers:
+      Host: "{{ cf70_ha_name }}"
+      X-Forwarded-For: 203.0.113.10
+      X-Forwarded-Proto: https
+    status_code: 200
+    timeout: 10
+    use_proxy: false
+  delegate_to: cf70_haos_pve
+  changed_when: false
+
+- name: Report native HAOS HTTP proxy trust applied
+  ansible.builtin.debug:
+    msg: "HA70_HTTP_NATIVE_PROXY={{ cf70_native_http_proxy }} FORWARDED_HTTP=200"

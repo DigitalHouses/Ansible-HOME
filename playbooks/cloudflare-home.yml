@@ -337,9 +337,19 @@
       ansible.builtin.include_tasks: ../tasks/cf70-ha-mtls-publish.yml
       when: cf70_action == 'publish_ha_mtls'
 
-    - name: Enable HAOS trust for the existing HOME mTLS Tunnel reverse proxy
+    - name: Enable HAOS native HTTP proxy trust after 2026.8 migration
+      ansible.builtin.include_tasks: ../tasks/cf70-haos-native-http.yml
+      when:
+        - cf70_action == 'publish_ha_mtls'
+        - cf70_ha_http_native_data is defined
+        - cf70_ha_http_native_data.yaml_migration_done | default(false) | bool
+
+    - name: Enable legacy HAOS YAML proxy trust before HTTP settings migration
       ansible.builtin.include_tasks: ../tasks/cf70-haos-proxy.yml
-      when: cf70_action == 'publish_ha_mtls'
+      when:
+        - cf70_action == 'publish_ha_mtls'
+        - cf70_ha_http_native_data is not defined or
+          not (cf70_ha_http_native_data.yaml_migration_done | default(false) | bool)
 
     - name: Enroll HOME PVE and Media VM for outbound path read-only audit
       ansible.builtin.add_host:
