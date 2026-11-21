@@ -179,3 +179,65 @@
       - "HA70_PROXY_LOG_REMOTE_RC={{ cf70_ha_logfile.rc }}"
       - "HA70_PROXY_LOG_GUEST_EXIT={{ (cf70_ha_logfile.stdout | from_json).exitcode | default('NONE') if cf70_ha_logfile.rc == 0 and cf70_ha_logfile.stdout | trim is match('^\\{') else 'UNAVAILABLE' }}"
       - "HA70_PROXY_LOG_IPS={{ (((cf70_ha_logfile.stdout | from_json)['out-data'] | default('')) | regex_findall('\\b(?:[0-9]{1,3}[.]){3}[0-9]{1,3}\\b') | unique | list) if cf70_ha_logfile.rc == 0 and cf70_ha_logfile.stdout | trim is match('^\\{') else 'UNAVAILABLE' }}"
+
+- name: Inspect configured HAOS trusted proxies without exposing other settings
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ssh
+      - -i
+      - /var/lib/semaphore/.ssh/id_ed25519
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      - -o
+      - ConnectTimeout=5
+      - "root@{{ pve.ipv4 }}"
+      - >-
+        qm guest exec 2222 -- /bin/sh -c
+        'grep -nE "^(http:|[[:space:]]*use_x_forwarded_for:|[[:space:]]*trusted_proxies:|[[:space:]]*-[[:space:]]*[0-9]+([.][0-9]+){3})"
+        /mnt/data/supervisor/homeassistant/configuration.yaml'
+  register: cf70_ha_configured_proxies
+  changed_when: false
+  failed_when: false
+
+- name: Report only active HAOS reverse proxy directive values
+  ansible.builtin.debug:
+    msg: >-
+      HA70_PROXY_CONFIG={{
+      (cf70_ha_configured_proxies.stdout | from_json)['out-data'] | trim
+      if cf70_ha_configured_proxies.rc == 0 and
+      cf70_ha_configured_proxies.stdout | trim is match('^\\{')
+      else 'UNAVAILABLE' }}
+
+- name: Compare plain and forwarded HAOS HTTP from the real HOME PVE connector
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ssh
+      - -i
+      - /var/lib/semaphore/.ssh/id_ed25519
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      - -o
+      - ConnectTimeout=5
+      - "root@{{ pve.ipv4 }}"
+      - >-
+        /bin/sh -c 'ip route get {{ cf70_ha_ip }};
+        curl -sS -m 6 -o /dev/null -w "PLAIN_HTTP=%{http_code}\\n" http://{{ cf70_ha_ip }}:80/;
+        curl -sS -m 6 -o /dev/null -w "FORWARDED_HTTP=%{http_code}\\n"
+        -H "Host: {{ cf70_ha_name }}"
+        -H "X-Forwarded-For: 203.0.113.10"
+        -H "X-Forwarded-Proto: https" http://{{ cf70_ha_ip }}:80/'
+  register: cf70_ha_proxy_route_check
+  changed_when: false
+  failed_when: false
+
+- name: Report peer route and HAOS reverse proxy HTTP results
+  ansible.builtin.debug:
+    msg: "HA70_PROXY_ROUTE_TEST_RC={{ cf70_ha_proxy_route_check.rc }} DETAILS={{ cf70_ha_proxy_route_check.stdout_lines }}"
