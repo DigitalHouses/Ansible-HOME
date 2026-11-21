@@ -209,3 +209,44 @@
 - name: Report peer route and HAOS reverse proxy HTTP results
   ansible.builtin.debug:
     msg: "HA70_PROXY_ROUTE_TEST_RC={{ cf70_ha_proxy_route_check.rc }} DETAILS={{ cf70_ha_proxy_route_check.stdout_lines }}"
+
+- name: Read HAOS native HTTP settings used since Core 2026.8
+  ansible.builtin.command:
+    argv:
+      - /usr/bin/ssh
+      - -i
+      - /var/lib/semaphore/.ssh/id_ed25519
+      - -o
+      - BatchMode=yes
+      - -o
+      - StrictHostKeyChecking=yes
+      - -o
+      - UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      - -o
+      - ConnectTimeout=5
+      - "root@{{ pve.ipv4 }}"
+      - >-
+        qm guest exec 2222 -- /bin/cat
+        /mnt/data/supervisor/homeassistant/.storage/http
+  register: cf70_ha_http_native
+  failed_when: false
+  changed_when: false
+  no_log: true
+
+- name: Decode HAOS native HTTP settings without logging private fields
+  ansible.builtin.set_fact:
+    cf70_ha_http_native_data: >-
+      {{ ((cf70_ha_http_native.stdout | from_json)['out-data'] | from_json).data }}
+  when:
+    - cf70_ha_http_native.rc == 0
+    - (cf70_ha_http_native.stdout | from_json).exitcode == 0
+  no_log: true
+
+- name: Report effective HAOS HTTP storage trust settings only
+  ansible.builtin.debug:
+    msg:
+      - "HA70_HTTP_STORAGE_PRESENT={{ cf70_ha_http_native_data is defined }}"
+      - "HA70_HTTP_MIGRATION_DONE={{ cf70_ha_http_native_data.yaml_migration_done | default('UNKNOWN') }}"
+      - "HA70_HTTP_STABLE_XFF={{ cf70_ha_http_native_data.stable.use_x_forwarded_for | default(false) }}"
+      - "HA70_HTTP_STABLE_TRUST={{ cf70_ha_http_native_data.stable.trusted_proxies | default([]) }}"
+      - "HA70_HTTP_PENDING={{ cf70_ha_http_native_data.pending is defined and cf70_ha_http_native_data.pending is not none }}"
