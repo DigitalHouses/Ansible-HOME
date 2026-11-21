@@ -197,14 +197,20 @@
       - "root@{{ pve.ipv4 }}"
       - >-
         qm guest exec 2222 -- /bin/sh -c
-        'grep -nE "^(http:|[[:space:]]*use_x_forwarded_for:|[[:space:]]*trusted_proxies:|[[:space:]]*-[[:space:]]*[0-9]+([.][0-9]+){3})" /mnt/data/supervisor/homeassistant/configuration.yaml'
+        'grep -nE "^(http:|[[:space:]]*use_x_forwarded_for:|[[:space:]]*trusted_proxies:|[[:space:]]*-[[:space:]]*[0-9]+([.][0-9]+){3})"
+        /mnt/data/supervisor/homeassistant/configuration.yaml'
   register: cf70_ha_configured_proxies
   changed_when: false
   failed_when: false
 
 - name: Report only active HAOS reverse proxy directive values
   ansible.builtin.debug:
-    msg: "HA70_PROXY_CONFIG={{ (cf70_ha_configured_proxies.stdout | from_json)['out-data'] | trim if cf70_ha_configured_proxies.rc == 0 and cf70_ha_configured_proxies.stdout | trim is match('^\\{') else 'UNAVAILABLE' }}"
+    msg: >-
+      HA70_PROXY_CONFIG={{
+      (cf70_ha_configured_proxies.stdout | from_json)['out-data'] | trim
+      if cf70_ha_configured_proxies.rc == 0 and
+      cf70_ha_configured_proxies.stdout | trim is match('^\\{')
+      else 'UNAVAILABLE' }}
 
 - name: Compare plain and forwarded HAOS HTTP from the real HOME PVE connector
   ansible.builtin.command:
