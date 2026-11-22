@@ -250,3 +250,20 @@
       - "HA70_HTTP_STABLE_XFF={{ cf70_ha_http_native_data.stable.use_x_forwarded_for | default(false) }}"
       - "HA70_HTTP_STABLE_TRUST={{ cf70_ha_http_native_data.stable.trusted_proxies | default([]) }}"
       - "HA70_HTTP_PENDING={{ cf70_ha_http_native_data.pending is defined and cf70_ha_http_native_data.pending is not none }}"
+
+- name: Read Cloudflare Managed CA hostname associations for mTLS validation
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/certificate_authorities/hostname_associations"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: [200, 403]
+  register: cf70_client_ca_hosts
+  changed_when: false
+  no_log: true
+
+- name: Show only CA-associated hostnames and whether HOME HAOS is included
+  ansible.builtin.debug:
+    msg:
+      - "HA70_CA_HOST_HTTP={{ cf70_client_ca_hosts.status }}"
+      - "HA70_CA_HOSTS={{ cf70_client_ca_hosts.json.result.hostnames | default([]) }}"
+      - "HA70_CA_HOME_ENABLED={{ cf70_ha_name in (cf70_client_ca_hosts.json.result.hostnames | default([])) }}"
