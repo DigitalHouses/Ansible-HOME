@@ -47,3 +47,19 @@
       - "CF70_LOCAL_REGISTERED_CONNECTIONS={{ cf70_cfg_connect_count }}"
       - "CF70_LOCAL_JOURNAL_ERRORS={{ cf70_cfg_error_count }}"
       - "CF70_LIVE_CONNECTOR_VERSIONS={{ cf70_connections.json.result | map(attribute='version') | list }}"
+
+- name: Extract nonsecret error summaries from the existing PVE cloudflared journal
+  ansible.builtin.set_fact:
+    cf70_cfg_error_summaries: >-
+      {{ cf70_pve_journal.stdout_lines |
+         select('search', ' ERR ') |
+         map('regex_replace', '^.* ERR ', 'ERR ') |
+         map('regex_replace', '(?i)(token|secret|password|credential|authorization|private_key)[^ ]*', '[REDACTED]') |
+         map('regex_replace', 'https?://[^ ]+', '[URL]') |
+         map('truncate', 200, True) |
+         unique | list }}
+  no_log: true
+
+- name: Print only sanitized errors relevant to remote-config reception
+  ansible.builtin.debug:
+    msg: "{{ cf70_cfg_error_summaries[:12] }}"
