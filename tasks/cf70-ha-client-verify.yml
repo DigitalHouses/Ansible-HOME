@@ -40,3 +40,36 @@
 - name: Report successful PKCS12 integrity and local HAOS reachability checks
   ansible.builtin.debug:
     msg: HA70_DH_PKCS12=VALID HA70_LOCAL_HAOS_HTTP=200
+
+- name: Test authenticated public HAOS URL with the existing DH PKCS12
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cert=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
+    passfile=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
+    password="$(cat "$passfile")"
+    printf 'cert = "%s:%s"\ncert-type = "P12"\n' "$cert" "$password" |
+      curl --config - --noproxy '*' --silent --show-error --max-time 15 \
+      --output /dev/null --write-out '%{http_code}' \
+      https://serzhan-home-pve-ha-mtls.digitalhouses.vip/
+  args:
+    executable: /bin/bash
+  become: true
+  delegate_to: cf70_verify_media
+  register: cf70_verify_https
+  retries: 3
+  delay: 3
+  until: cf70_verify_https.rc == 0 and cf70_verify_https.stdout | trim in ['200', '401']
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Report public mTLS result without exposing the client password
+  ansible.builtin.debug:
+    msg: "HA70_PUBLIC_MTLS_HTTP={{ cf70_verify_https.stdout | default('UNKNOWN') | trim }}"
+
+- name: Require authenticated tunnel to reach the HAOS origin
+  ansible.builtin.assert:
+    that:
+      - cf70_verify_https.rc == 0
+      - cf70_verify_https.stdout | trim in ['200', '401']
+    fail_msg: HA70_PUBLIC_MTLS_STILL_NOT_REACHING_HAOS
