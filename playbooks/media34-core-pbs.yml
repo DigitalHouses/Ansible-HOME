@@ -17,7 +17,7 @@
         that:
           - home34_profile == 'home'
           - home34_site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
-          - home34_action in ['audit', 'prepare', 'push', 'restore-storage', 'restore-check', 'restore-test', 'local-check', 'local-test']
+          - home34_action in ['audit', 'prepare', 'push', 'restore-storage', 'restore-check', 'restore-test', 'local-check', 'local-test', 'schedule', 'unschedule']
           - DH_GITHUB_PROVISION_TOKEN | default('', true) | length > 0
           - pve.node | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -87,6 +87,7 @@
         home34_store: "pbs-{{ home34_site.owner_slug }}"
         home34_remote: "core-{{ home34_site_id }}"
         home34_job: "push-{{ home34_site_id }}"
+        home34_schedule: "{{ DH_PBS_CORE_SCHEDULE | default('05:00', true) | trim }}"
         home34_core_ip: 100.97.126.67
         home34_core_store: pbs-core
       changed_when: false
@@ -245,7 +246,7 @@
           - home34_existing_remote | length == 1
           - home34_existing_job | length == 1
         fail_msg: HOME34_PREPARE_REMOTE_AND_PUSH_JOB_FIRST
-      when: home34_action == 'push'
+      when: home34_action in ['push', 'schedule', 'unschedule']
 
     - name: Manually execute only the existing HOME-owned native Push job
       ansible.builtin.command:
@@ -261,6 +262,10 @@
           - "HOME34_PUSH_RC={{ home34_push_run.rc }}"
           - "HOME34_PUSH_OUTPUT={{ home34_push_run.stdout_lines | default([]) | last | default('') }}"
       when: home34_action == 'push'
+
+    - name: Change only the managed native PBS Push schedule when explicitly requested
+      ansible.builtin.include_tasks: ../tasks/media34-push-schedule.yml
+      when: home34_action in ['schedule', 'unschedule']
 
 - name: "34 | Configure a CORE restore-only PVE storage when explicitly requested"
   hosts: home34_pve_hosts

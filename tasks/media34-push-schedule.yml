@@ -1,0 +1,66 @@
+---
+# Enable or remove only this HOME's native PBS Push schedule.
+# A schedule never initiates a transfer immediately. CORE and PVE stay untouched.
+- name: Require a valid daily local PBS time for scheduled Push
+  ansible.builtin.assert:
+    that: home34_schedule is match('^([01][0-9]|2[0-3]):[0-5][0-9]$')
+    fail_msg: HOME34_SCHEDULE_MUST_BE_HH_MM
+  when: home34_action == 'schedule'
+
+- name: Configure the site Push to run daily at the requested time
+  ansible.builtin.command:
+    argv:
+      - proxmox-backup-manager
+      - sync-job
+      - update
+      - "{{ home34_job }}"
+      - --schedule
+      - "{{ home34_schedule }}"
+      - --disable
+      - 'false'
+  changed_when: true
+  when:
+    - home34_action == 'schedule'
+    - >-
+      (home34_existing_job[0].schedule | default('', true)) != home34_schedule or
+      (home34_existing_job[0].disable | default(false) | bool)
+
+- name: Remove only the managed Push schedule without deleting its configuration
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, sync-job, update, "{{ home34_job }}", --delete, schedule]
+  changed_when: true
+  when:
+    - home34_action == 'unschedule'
+    - (home34_existing_job[0].schedule | default('', true)) != ''
+
+- name: Read back the exact HOME Push job after schedule action
+  ansible.builtin.command:
+    argv: [proxmox-backup-manager, sync-job, show, "{{ home34_job }}", --output-format, json]
+  register: home34_schedule_readback
+  changed_when: false
+
+- name: Verify the expected enabled or unscheduled state
+  ansible.builtin.assert:
+    that:
+      - (home34_schedule_readback.stdout | from_json).store == home34_store
+      - (home34_schedule_readback.stdout | from_json).remote == home34_remote
+      - (home34_schedule_readback.stdout | from_json)['remote-store'] == home34_core_store
+      - (home34_schedule_readback.stdout | from_json)['remote-ns'] == home34_site.id
+      - (home34_schedule_readback.stdout | from_json)['sync-direction'] == 'push'
+      - not (home34_schedule_readback.stdout | from_json)['remove-vanished'] | default(false) | bool
+      - >-
+        (home34_schedule_readback.stdout | from_json).schedule | default('', true)
+        == (home34_schedule if home34_action == 'schedule' else '')
+      - >-
+        home34_action != 'schedule' or
+        not (home34_schedule_readback.stdout | from_json).disable | default(false) | bool
+    fail_msg: HOME34_PUSH_SCHEDULE_READBACK_MISMATCH
+
+- name: Report native Push schedule without starting a transfer
+  ansible.builtin.debug:
+    msg:
+      - "HOME34_PUSH_JOB={{ home34_job }}"
+      - "HOME34_SCHEDULE={{ home34_schedule if home34_action == 'schedule' else 'NONE' }}"
+      - "HOME34_TARGET={{ home34_core_ip }}/{{ home34_core_store }}/{{ home34_site.id }}"
+      - HOME34_PUSH_EXECUTED=false
+      - HOME34_PVE_BACKUP_JOBS_CHANGED=false
