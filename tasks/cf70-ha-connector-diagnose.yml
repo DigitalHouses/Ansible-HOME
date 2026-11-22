@@ -1,0 +1,49 @@
+---
+# Read-only diagnosis of remote ingress propagation on existing HOME PVE.
+- name: Select the existing PVE connector for read-only journal inspection
+  ansible.builtin.add_host:
+    name: cf70_journal_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Read recent cloudflared journal without printing its raw contents
+  ansible.builtin.command:
+    argv: [journalctl, -u, cloudflared.service, -n, '250', -o, cat, --no-pager]
+  delegate_to: cf70_journal_pve
+  register: cf70_pve_journal
+  changed_when: false
+  no_log: true
+
+- name: Select only remote config load events and expected warning metadata
+  ansible.builtin.set_fact:
+    cf70_cfg_loaded_events: >-
+      {{ cf70_pve_journal.stdout_lines |
+         select('search', 'Updated to new configuration') | list }}
+    cf70_cfg_no_ingress_count: >-
+      {{ cf70_pve_journal.stdout_lines |
+         select('search', 'No ingress rules were defined') | list | length }}
+    cf70_cfg_connect_count: >-
+      {{ cf70_pve_journal.stdout_lines |
+         select('search', 'Registered tunnel connection') | list | length }}
+    cf70_cfg_error_count: >-
+      {{ cf70_pve_journal.stdout_lines |
+         select('search', ' ERR ') | list | length }}
+  no_log: true
+
+- name: Report sanitized remote config versions without exposing any ingress content
+  ansible.builtin.debug:
+    msg:
+      - "CF70_API_REMOTE_VERSION={{ cf70_config.json.result.version | default('UNAVAILABLE') }}"
+      - "CF70_LOCAL_REMOTE_CONFIG_EVENTS={{ cf70_cfg_loaded_events | length }}"
+      - "CF70_LOCAL_REMOTE_CONFIG_VERSIONS={{ cf70_cfg_loaded_events | map('regex_search', 'version=[0-9]+') | list }}"
+      - "CF70_LOCAL_NO_INGRESS_WARNINGS={{ cf70_cfg_no_ingress_count }}"
+      - "CF70_LOCAL_REGISTERED_CONNECTIONS={{ cf70_cfg_connect_count }}"
+      - "CF70_LOCAL_JOURNAL_ERRORS={{ cf70_cfg_error_count }}"
+      - "CF70_LIVE_CONNECTOR_VERSIONS={{ cf70_connections.json.result | map(attribute='version') | list }}"
