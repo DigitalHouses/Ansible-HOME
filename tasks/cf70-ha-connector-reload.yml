@@ -1,0 +1,99 @@
+---
+# HOME-only repair: restart the existing remotely managed connector to reload
+# the ingress config already confirmed in Cloudflare. No new Tunnel/route/cert.
+- name: Identify the HAOS mTLS hostname and existing remote ingress
+  ansible.builtin.set_fact:
+    cf70_fix_ha_hostname: "{{ site_id }}-pve-ha-mtls.{{ cf70_zone_name }}"
+    cf70_fix_ha_routes: >-
+      {{ cf70_config.json.result.config.ingress |
+         selectattr('hostname', 'defined') |
+         selectattr('hostname', 'equalto', site_id ~ '-pve-ha-mtls.' ~ cf70_zone_name) | list }}
+
+- name: Require the exact existing HOME route before restarting the connector
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+      - cf70_tunnel.id == '6a04d9cd-0b17-48f3-8366-9f86ea08cb24'
+      - cf70_tunnel.status == 'healthy'
+      - cf70_pve_connector.stdout | trim == 'active'
+      - cf70_fix_ha_routes | length == 1
+      - cf70_fix_ha_routes[0].service == 'http://192.168.11.222:80'
+      - cf70_config.json.result.config.ingress[-1].service == 'http_status:404'
+    fail_msg: HA70_REPAIR_REFUSED_UNEXPECTED_TUNNEL_OR_ROUTE
+
+- name: Select the existing HOME PVE for connector reload
+  ansible.builtin.add_host:
+    name: cf70_ha_connector_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Restart only HOME PVE cloudflared to reload Cloudflare remote ingress
+  ansible.builtin.systemd_service:
+    name: cloudflared.service
+    state: restarted
+  delegate_to: cf70_ha_connector_pve
+
+- name: Confirm the existing PVE cloudflared service is active after restart
+  ansible.builtin.command:
+    argv: [systemctl, is-active, cloudflared.service]
+  delegate_to: cf70_ha_connector_pve
+  register: cf70_restarted_status
+  retries: 8
+  delay: 3
+  until: cf70_restarted_status.stdout | trim == 'active'
+  changed_when: false
+
+- name: Select the existing HOME Media VM holding the PKCS12
+  ansible.builtin.add_host:
+    name: cf70_ha_cert_media_test
+    ansible_host: 192.168.11.223
+    ansible_connection: ssh
+    ansible_user: debian
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Test public HAOS route with existing DH PKCS12 without exposing password
+  ansible.builtin.shell: |
+    set -eu
+    cert=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
+    passfile=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
+    password="$(cat "$passfile")"
+    printf 'cert = "%s:%s"\ncert-type = "P12"\n' "$cert" "$password" |
+      curl --config - --noproxy '*' --silent --show-error --max-time 20 \
+      --output /dev/null --write-out '%{http_code}' \
+      https://serzhan-home-pve-ha-mtls.digitalhouses.vip/
+  args:
+    executable: /bin/bash
+  delegate_to: cf70_ha_cert_media_test
+  become: true
+  register: cf70_ha_reloaded_http
+  retries: 6
+  delay: 5
+  until: cf70_ha_reloaded_http.rc == 0 and cf70_ha_reloaded_http.stdout | trim in ['200', '401']
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Report client-authenticated public HAOS HTTP status without secrets
+  ansible.builtin.debug:
+    msg:
+      - "HA70_RELOADED_CLOUDFLARED={{ cf70_restarted_status.stdout | trim }}"
+      - "HA70_WITH_DH_MTLS_HTTP={{ cf70_ha_reloaded_http.stdout | default('UNKNOWN') | trim }}"
+
+- name: Require that HAOS mTLS now reaches the origin
+  ansible.builtin.assert:
+    that:
+      - cf70_ha_reloaded_http.rc == 0
+      - cf70_ha_reloaded_http.stdout | trim in ['200', '401']
+    fail_msg: HA70_TUNNEL_RESTARTED_BUT_REMOTE_MTLS_NOT_YET_WORKING
