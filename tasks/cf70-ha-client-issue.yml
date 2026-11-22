@@ -24,7 +24,7 @@
       - -out
       - "{{ cf70_client_dir.path }}/client.csr"
       - -subj
-      - "/CN={{ cf70_ha_name }}/O=DigitalHouses"
+      - "/CN={{ cf70_ha_name }}"
   changed_when: true
   no_log: true
 
@@ -37,10 +37,10 @@
     body:
       csr: "{{ lookup('ansible.builtin.file', cf70_client_dir.path ~ '/client.csr') }}"
       validity_days: 1095
-    status_code: [200, 400, 401, 403, 422]
+    status_code: [201, 200, 400, 401, 403, 422]
     use_proxy: false
   register: cf70_issued_client
-  changed_when: cf70_issued_client.status | default(0) == 200
+  changed_when: cf70_issued_client.status | default(0) == 201
   failed_when: false
   no_log: true
 
