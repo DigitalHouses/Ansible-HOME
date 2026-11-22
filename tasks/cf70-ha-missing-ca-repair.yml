@@ -58,12 +58,28 @@
   changed_when: false
   register: cf70_pve_tls_verify
 
-- name: Make native Proxmox CA available under existing cloudflared CA path
+- name: Remove only the temporary symlink to the native Proxmox CA
   ansible.builtin.file:
+    path: /etc/cloudflared/dh-pve-ca.pem
+    state: absent
+  delegate_to: cf70_ca_pve
+  when: cf70_local_ca.stat.islnk | default(false)
+
+- name: Copy public Proxmox CA directly into cloudflared's own directory
+  ansible.builtin.copy:
     src: /etc/pve/pve-root-ca.pem
     dest: /etc/cloudflared/dh-pve-ca.pem
-    state: link
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
   delegate_to: cf70_ca_pve
+
+- name: Confirm Cloudflare's CA copy is a readable X509 certificate
+  ansible.builtin.command:
+    argv: [openssl, x509, -in, /etc/cloudflared/dh-pve-ca.pem, -noout]
+  delegate_to: cf70_ca_pve
+  changed_when: false
 
 - name: Restart only existing PVE cloudflared after restoring CA pool
   ansible.builtin.systemd_service:
