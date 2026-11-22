@@ -18,9 +18,9 @@
       - openssl
       - pkcs12
       - -in
-      - /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
+      - /serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
       - -passin
-      - file:/serzhan-pool/digitalhouses/serzhan-home-ha-mtls-password.txt
+      - file:/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
       - -info
       - -noout
   delegate_to: cf70_verify_media
