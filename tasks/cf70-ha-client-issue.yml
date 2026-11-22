@@ -73,3 +73,22 @@
     dest: "{{ cf70_client_dir.path }}/password.txt"
     mode: '0600'
   no_log: true
+
+- name: Package client cert and private key as password-protected PKCS12
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - pkcs12
+      - -export
+      - -in
+      - "{{ cf70_client_dir.path }}/cert.pem"
+      - -inkey
+      - "{{ cf70_client_dir.path }}/key.pem"
+      - -out
+      - "{{ cf70_client_dir.path }}/client.p12"
+      - -name
+      - DigitalHouses HOME HAOS
+      - -passout
+      - "file:{{ cf70_client_dir.path }}/password.txt"
+  changed_when: true
+  no_log: true
