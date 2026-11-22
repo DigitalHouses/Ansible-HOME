@@ -1,0 +1,6 @@
+---
+- name: Confirm HOME mTLS client delivery target
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+    fail_msg: HA70_HOME_ONLY
