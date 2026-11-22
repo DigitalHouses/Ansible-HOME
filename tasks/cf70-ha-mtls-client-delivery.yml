@@ -34,3 +34,24 @@
       - cf70_dh_dir.stat.isdir | default(false)
       - not cf70_dh_p12.stat.exists
     fail_msg: HA70_DH_CLIENT_DESTINATION_NOT_READY
+
+- name: Issue client certificate and deliver private package into DH
+  block:
+    - name: Create private temporary workspace on Semaphore runner
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: dh-ha-client-
+      register: cf70_client_dir
+
+    - name: Issue new Cloudflare client certificate with exact HAOS hostname
+      ansible.builtin.include_tasks: cf70-ha-client-issue.yml
+
+    - name: Test and publish encrypted PKCS12 to existing DH admin share
+      ansible.builtin.include_tasks: cf70-ha-client-deliver.yml
+  always:
+    - name: Delete ephemeral client private key and local password
+      ansible.builtin.file:
+        path: "{{ cf70_client_dir.path }}"
+        state: absent
+      when: cf70_client_dir is defined and cf70_client_dir.path is defined
+      no_log: true
