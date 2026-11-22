@@ -20,7 +20,7 @@
     - name: Require safe read-only task 70 mode and site credentials
       ansible.builtin.assert:
         that:
-          - cf70_action in ['audit', 'migrate', 'publish_semaphore', 'publish_webmin', 'publish_pbs_private', 'update_cloudflared', 'configure_cloudflared_auto', 'audit_ha_mtls', 'publish_ha_mtls', 'issue_ha_mtls_client', 'verify_ha_mtls_client', 'organize_ha_mtls_client', 'repair_ha_mtls_ingress', 'diagnose_ha_mtls_connector', 'resync_ha_mtls_ingress']
+          - cf70_action in ['audit', 'migrate', 'publish_semaphore', 'publish_webmin', 'publish_pbs_private', 'update_cloudflared', 'configure_cloudflared_auto', 'audit_ha_mtls', 'publish_ha_mtls', 'issue_ha_mtls_client', 'verify_ha_mtls_client', 'organize_ha_mtls_client', 'repair_ha_mtls_ingress', 'diagnose_ha_mtls_connector', 'resync_ha_mtls_ingress', 'repair_pve_ca_pool']
           - site_id is match('^[a-z][a-z0-9]*(-[a-z0-9]+)+$')
           - cf70_token | length > 0
           - pve.ipv4 is match('^([0-9]{1,3}[.]){3}[0-9]{1,3}$')
@@ -374,6 +374,10 @@
     - name: Re-sync existing Cloudflare Tunnel remote ingress without changing routes
       ansible.builtin.include_tasks: ../tasks/cf70-ha-connector-resync.yml
       when: cf70_action == 'resync_ha_mtls_ingress'
+
+    - name: Restore missing HOME PVE CA pool for Cloudflare remote ingress
+      ansible.builtin.include_tasks: ../tasks/cf70-ha-missing-ca-repair.yml
+      when: cf70_action == 'repair_pve_ca_pool'
 
     - name: Enroll HOME PVE and Media VM for outbound path read-only audit
       ansible.builtin.add_host:
