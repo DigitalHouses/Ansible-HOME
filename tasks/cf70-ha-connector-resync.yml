@@ -19,6 +19,8 @@
       - cf70_pve_connector.stdout | trim == 'active'
       - cf70_config.json.result.config.ingress[-1].service == 'http_status:404'
       - cf70_resync_ha_services == ['http://192.168.11.222:80']
+      - cf70_config.json.result.config.ingress[-2].hostname == 'serzhan-home-pve-ha-mtls.digitalhouses.vip'
+      - cf70_config.json.result.config.ingress[-2].originRequest is not defined
     fail_msg: HA70_REMOTE_RESYNC_GUARD_FAILED
 
 - name: Recheck unchanged shared Cloudflare remote config before republishing
@@ -38,14 +40,39 @@
       - cf70_resync_before.json.result.version == cf70_config.json.result.version
     fail_msg: HA70_RESYNC_REFUSED_CONCURRENT_TUNNEL_CHANGE
 
-- name: Republish same remote ingress config to trigger connector config event
+- name: Add only the default TCP timeout to HAOS to trigger version increment
+  ansible.builtin.set_fact:
+    cf70_resync_ha_entry: >-
+      {{ cf70_config.json.result.config.ingress[-2] |
+         combine({'originRequest': {'connectTimeout': '30s'}}, recursive=true) }}
+
+- name: Preserve every ingress except the HAOS default timeout
+  ansible.builtin.set_fact:
+    cf70_resync_next_ingress: >-
+      {{ cf70_config.json.result.config.ingress[:-2] +
+         [cf70_resync_ha_entry] + cf70_config.json.result.config.ingress[-1:] }}
+
+- name: Build next remote config with unchanged other entries and properties
+  ansible.builtin.set_fact:
+    cf70_resync_next_config: >-
+      {{ cf70_config.json.result.config |
+         combine({'ingress': cf70_resync_next_ingress}) }}
+
+- name: Require all published routes and services remain unchanged
+  ansible.builtin.assert:
+    that:
+      - cf70_resync_next_ingress | map(attribute='service') | list == cf70_config.json.result.config.ingress | map(attribute='service') | list
+      - cf70_resync_next_ingress | length == cf70_config.json.result.config.ingress | length
+    fail_msg: HA70_RESYNC_UNEXPECTED_ROUTE_CHANGE
+
+- name: Publish remote version with only HAOS default connection timeout
   ansible.builtin.uri:
     url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
     method: PUT
     headers: "{{ cf70_headers }}"
     body_format: json
     body:
-      config: "{{ cf70_config.json.result.config }}"
+      config: "{{ cf70_resync_next_config }}"
     use_proxy: false
     status_code: 200
   register: cf70_resync_put
@@ -56,7 +83,7 @@
   ansible.builtin.assert:
     that:
       - cf70_resync_put.json.success | bool
-      - cf70_resync_put.json.result.config == cf70_config.json.result.config
+      - cf70_resync_put.json.result.config == cf70_resync_next_config
     fail_msg: HA70_RESYNC_UNEXPECTED_INGRESS_CHANGE
 
 - name: Report resync version while preserving routes and certificates
@@ -64,7 +91,8 @@
     msg:
       - "HA70_REMOTE_CONFIG_VERSION_BEFORE={{ cf70_config.json.result.version }}"
       - "HA70_REMOTE_CONFIG_VERSION_AFTER={{ cf70_resync_put.json.result.version | default('NOT_RETURNED') }}"
-      - HA70_REMOTE_CONFIG_INGRESS_UNCHANGED=true
+      - HA70_REMOTE_CONFIG_ROUTES_UNCHANGED=true
+      - HA70_HAOS_CONNECT_TIMEOUT=30s_DEFAULT
 
 - name: Allow existing PVE connector to accept pushed configuration
   ansible.builtin.pause:
