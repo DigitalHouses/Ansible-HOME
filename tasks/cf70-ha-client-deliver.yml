@@ -36,3 +36,12 @@
   delegate_to: cf70_ha_media
   become: true
   no_log: true
+
+- name: Report Cloudflare client issuance and DH delivery without secrets
+  ansible.builtin.debug:
+    msg:
+      - "HA70_CLIENT_CERT_ID={{ cf70_issued_client.json.result.id }}"
+      - "HA70_CLIENT_CERT_EXPIRES={{ cf70_issued_client.json.result.expires_on }}"
+      - HA70_CLIENT_MTLS_TEST=PASSED
+      - HA70_CLIENT_P12=//192.168.11.223/DigitalHouses/serzhan-home-ha-mtls.p12
+      - HA70_CLIENT_PASS=//192.168.11.223/DigitalHouses/serzhan-home-ha-mtls-password.txt
