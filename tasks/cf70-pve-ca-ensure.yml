@@ -1,0 +1,80 @@
+---
+# Keep the public Proxmox CA next to cloudflared. A missing/unreadable CA
+# causes the remote-config loader to reject ALL ingress routes with HTTP 503.
+- name: Select existing HOME PVE for cloudflared trust setup
+  ansible.builtin.add_host:
+    name: cf70_ca_managed_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Verify native Proxmox server certificate against the native public CA
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -CAfile
+      - /etc/pve/pve-root-ca.pem
+      - /etc/pve/local/pve-ssl.pem
+  delegate_to: cf70_ca_managed_pve
+  changed_when: false
+
+- name: Inspect existing cloudflared CA path without following symlinks
+  ansible.builtin.stat:
+    path: /etc/cloudflared/dh-pve-ca.pem
+    follow: false
+  delegate_to: cf70_ca_managed_pve
+  register: cf70_ca_current
+  changed_when: false
+
+- name: Refuse replacement of an unrelated CA symlink or special file
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+      - pve.ipv4 == '192.168.11.220'
+      - not cf70_ca_current.stat.exists or
+        cf70_ca_current.stat.isreg | default(false) or
+        (cf70_ca_current.stat.islnk | default(false) and
+         cf70_ca_current.stat.lnk_source == '/etc/pve/pve-root-ca.pem')
+    fail_msg: CF70_PVE_CA_PATH_CONFLICT
+
+- name: Remove only obsolete symlink to Proxmox native CA
+  ansible.builtin.file:
+    path: /etc/cloudflared/dh-pve-ca.pem
+    state: absent
+  delegate_to: cf70_ca_managed_pve
+  when: cf70_ca_current.stat.islnk | default(false)
+
+- name: Synchronize native public CA directly into cloudflared directory
+  ansible.builtin.copy:
+    src: /etc/pve/pve-root-ca.pem
+    dest: /etc/cloudflared/dh-pve-ca.pem
+    remote_src: true
+    owner: root
+    group: root
+    mode: '0644'
+  delegate_to: cf70_ca_managed_pve
+  register: cf70_ca_synced
+
+- name: Verify copied cloudflared CA is a valid PEM certificate
+  ansible.builtin.command:
+    argv: [openssl, x509, -in, /etc/cloudflared/dh-pve-ca.pem, -noout]
+  delegate_to: cf70_ca_managed_pve
+  changed_when: false
+
+- name: Reload existing cloudflared only if its CA changed
+  ansible.builtin.systemd_service:
+    name: cloudflared.service
+    state: restarted
+  delegate_to: cf70_ca_managed_pve
+  when: cf70_ca_synced.changed
+
+- name: Report idempotent CA sync result
+  ansible.builtin.debug:
+    msg: "CF70_PVE_CA_SYNC=OK CHANGED={{ cf70_ca_synced.changed }}"
