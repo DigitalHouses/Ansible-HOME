@@ -291,8 +291,7 @@
 
     - name: Ensure HOME PVE cloudflared can read the native Proxmox CA
       ansible.builtin.include_tasks: ../tasks/cf70-pve-ca-ensure.yml
-      when: cf70_action in
-        ['migrate', 'configure_cloudflared_auto', 'update_cloudflared', 'publish_ha_mtls']
+      when: cf70_action in ['migrate', 'configure_cloudflared_auto', 'update_cloudflared', 'publish_ha_mtls']
 
     - name: Move the existing site connector to the existing PVE service
       ansible.builtin.include_tasks: ../tasks/cf70-migrate.yml
