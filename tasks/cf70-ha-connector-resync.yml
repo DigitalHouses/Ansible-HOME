@@ -1,6 +1,14 @@
 ---
 # Force a new remote configuration revision without changing any ingress entry.
 # The HOME PVE connector has returned built-in 503 despite correct API ingress.
+- name: Identify HAOS ingress in existing shared Tunnel configuration
+  ansible.builtin.set_fact:
+    cf70_resync_ha_services: >-
+      {{ cf70_config.json.result.config.ingress |
+         selectattr('hostname', 'defined') |
+         selectattr('hostname', 'equalto', 'serzhan-home-pve-ha-mtls.digitalhouses.vip') |
+         map(attribute='service') | list }}
+
 - name: Verify existing HOME tunnel and exact HAOS route before resync
   ansible.builtin.assert:
     that:
@@ -10,7 +18,7 @@
       - cf70_tunnel.status == 'healthy'
       - cf70_pve_connector.stdout | trim == 'active'
       - cf70_config.json.result.config.ingress[-1].service == 'http_status:404'
-      - cf70_config.json.result.config.ingress | selectattr('hostname', 'defined') | selectattr('hostname', 'equalto', 'serzhan-home-pve-ha-mtls.digitalhouses.vip') | map(attribute='service') | list == ['http://192.168.11.222:80']
+      - cf70_resync_ha_services == ['http://192.168.11.222:80']
     fail_msg: HA70_REMOTE_RESYNC_GUARD_FAILED
 
 - name: Recheck unchanged shared Cloudflare remote config before republishing
