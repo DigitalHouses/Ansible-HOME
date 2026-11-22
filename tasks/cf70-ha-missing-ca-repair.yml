@@ -1,0 +1,105 @@
+---
+# A missing Proxmox CA file aborts cloudflared's entire remote ingress reload.
+# Restore the public CA from Proxmox itself, not from any secret credential.
+- name: Refuse repair outside the existing HOME site and Tunnel
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+      - pve.ipv4 == '192.168.11.220'
+      - cf70_tunnel.id == '6a04d9cd-0b17-48f3-8366-9f86ea08cb24'
+      - cf70_tunnel.config_src == 'cloudflare'
+      - cf70_pve_connector.stdout | trim == 'active'
+    fail_msg: HA70_REPAIR_NOT_HOME_TUNNEL
+
+- name: Select existing HOME Proxmox for CA file repair
+  ansible.builtin.add_host:
+    name: cf70_ca_pve
+    ansible_host: "{{ pve.ipv4 }}"
+    ansible_connection: ssh
+    ansible_user: root
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Inspect native PVE root CA public certificate
+  ansible.builtin.stat:
+    path: /etc/pve/pve-root-ca.pem
+  register: cf70_native_ca
+  delegate_to: cf70_ca_pve
+
+- name: Inspect absent Cloudflare local CA path without following symlinks
+  ansible.builtin.stat:
+    path: /etc/cloudflared/dh-pve-ca.pem
+    follow: false
+  register: cf70_local_ca
+  delegate_to: cf70_ca_pve
+
+- name: Confirm native CA exists and missing target will not be overwritten
+  ansible.builtin.assert:
+    that:
+      - cf70_native_ca.stat.isreg | default(false)
+      - not cf70_local_ca.stat.exists or
+        (cf70_local_ca.stat.islnk | default(false) and
+        cf70_local_ca.stat.lnk_source == '/etc/pve/pve-root-ca.pem')
+    fail_msg: HA70_PVE_CA_MISSING_OR_TARGET_ALREADY_EXISTS
+
+- name: Verify Proxmox HTTPS server certificate against its native PVE CA
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - verify
+      - -CAfile
+      - /etc/pve/pve-root-ca.pem
+      - /etc/pve/local/pve-ssl.pem
+  delegate_to: cf70_ca_pve
+  changed_when: false
+  register: cf70_pve_tls_verify
+
+- name: Make native Proxmox CA available under existing cloudflared CA path
+  ansible.builtin.file:
+    src: /etc/pve/pve-root-ca.pem
+    dest: /etc/cloudflared/dh-pve-ca.pem
+    state: link
+  delegate_to: cf70_ca_pve
+
+- name: Restart only existing PVE cloudflared after restoring CA pool
+  ansible.builtin.systemd_service:
+    name: cloudflared.service
+    state: restarted
+  delegate_to: cf70_ca_pve
+
+- name: Confirm cloudflared remains active
+  ansible.builtin.command:
+    argv: [systemctl, is-active, cloudflared.service]
+  delegate_to: cf70_ca_pve
+  register: cf70_ca_cloudflared
+  retries: 8
+  delay: 3
+  until: cf70_ca_cloudflared.stdout | trim == 'active'
+  changed_when: false
+
+- name: Read whether restored connector applied remote ingress configuration
+  ansible.builtin.command:
+    argv: [journalctl, -u, cloudflared.service, -n, '180', -o, cat, --no-pager]
+  delegate_to: cf70_ca_pve
+  register: cf70_ca_journal
+  changed_when: false
+  no_log: true
+
+- name: Report only CA and remote config acceptance status
+  ansible.builtin.debug:
+    msg:
+      - "HA70_PVE_NATIVE_CA_VERIFY={{ cf70_pve_tls_verify.rc == 0 }}"
+      - HA70_CLOUDFLARED_CA=/etc/cloudflared/dh-pve-ca.pem
+      - "HA70_CLOUDFLARED_ACTIVE={{ cf70_ca_cloudflared.stdout | trim }}"
+      - "HA70_REMOTE_CONFIG_ACCEPTED={{ (cf70_ca_journal.stdout_lines | select('search', 'Updated to new configuration') | list | length) > 0 }}"
+      - "HA70_REMOTE_CONFIG_REJECTED={{ cf70_ca_journal.stdout_lines | select('search', 'Failed to update ingress') | list | length }}"
+
+- name: Require actual remote config loading after CA restoration
+  ansible.builtin.assert:
+    that:
+      - cf70_ca_journal.stdout_lines | select('search', 'Updated to new configuration') | list | length > 0
+    fail_msg: HA70_CA_PRESENT_BUT_REMOTE_INGRESS_NOT_APPLIED
