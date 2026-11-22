@@ -19,6 +19,13 @@
   become: true
   register: cf70_dh_dir
 
+- name: Confirm the existing DH administrator group is available
+  ansible.builtin.command:
+    argv: [getent, group, admin_group]
+  delegate_to: cf70_ha_media
+  become: true
+  changed_when: false
+
 - name: Check whether requested mTLS file already exists
   ansible.builtin.stat:
     path: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
