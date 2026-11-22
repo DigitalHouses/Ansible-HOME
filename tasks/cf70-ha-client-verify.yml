@@ -27,3 +27,16 @@
   become: true
   changed_when: false
   no_log: true
+
+- name: Confirm Home Assistant origin is available from Media
+  ansible.builtin.uri:
+    url: http://192.168.11.222/
+    status_code: 200
+    timeout: 10
+    use_proxy: false
+  delegate_to: cf70_verify_media
+  changed_when: false
+
+- name: Report successful PKCS12 integrity and local HAOS reachability checks
+  ansible.builtin.debug:
+    msg: HA70_DH_PKCS12=VALID HA70_LOCAL_HAOS_HTTP=200
