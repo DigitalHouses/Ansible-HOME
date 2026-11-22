@@ -15,10 +15,10 @@
   changed_when: false
   no_log: true
 
-- name: Copy encrypted P12 into the existing DigitalHouses share
+- name: Copy import password into the same admin-only DH share
   ansible.builtin.copy:
-    src: "{{ cf70_client_dir.path }}/client.p12"
-    dest: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
+    src: "{{ cf70_client_dir.path }}/password.txt"
+    dest: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls-password.txt
     owner: root
     group: admin_group
     mode: '0660'
@@ -26,10 +26,10 @@
   become: true
   no_log: true
 
-- name: Copy import password into the same admin-only DH share
+- name: Copy encrypted P12 into the existing DigitalHouses share
   ansible.builtin.copy:
-    src: "{{ cf70_client_dir.path }}/password.txt"
-    dest: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls-password.txt
+    src: "{{ cf70_client_dir.path }}/client.p12"
+    dest: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
     owner: root
     group: admin_group
     mode: '0660'
