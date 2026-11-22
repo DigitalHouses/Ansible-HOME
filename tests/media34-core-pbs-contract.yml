@@ -67,6 +67,7 @@
           - schedule | to_json is search('remove-vanished')
           - schedule | to_json is search('HOME34_PUSH_EXECUTED=false')
           - schedule | to_json is search('HOME34_SCHEDULE_MUST_BE_HH_MM')
+          - schedule | to_json is not search('\"--disable\"')
           - restore | to_json is search('pbs-core-restore')
           - restore | to_json is search('BACKUP_JOBS_CHANGED=false')
           - restore | to_json is search('script')
