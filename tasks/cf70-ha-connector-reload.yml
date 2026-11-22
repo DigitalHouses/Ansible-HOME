@@ -65,7 +65,7 @@
 
 - name: Test public HAOS route with existing DH PKCS12 without exposing password
   ansible.builtin.shell: |
-    set -eu
+    set -euo pipefail
     cert=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
     passfile=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
     password="$(cat "$passfile")"
