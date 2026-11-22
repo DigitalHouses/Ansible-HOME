@@ -1,0 +1,117 @@
+---
+# Organize the existing client certificate files; never reissue any certificate.
+- name: Select the existing HOME Media VM
+  ansible.builtin.add_host:
+    name: cf70_cert_media
+    ansible_host: 192.168.11.223
+    ansible_connection: ssh
+    ansible_user: debian
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Confirm intended HOME identity
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+    fail_msg: HA70_HOME_ONLY
+
+- name: Ensure the certificate directory exists within the existing DH share
+  ansible.builtin.file:
+    path: /serzhan-pool/digitalhouses/cert
+    state: directory
+    owner: root
+    group: admin_group
+    mode: '2770'
+  delegate_to: cf70_cert_media
+  become: true
+
+- name: Move existing client certificate and password into cert without overwrite
+  ansible.builtin.command:
+    argv:
+      - mv
+      - --
+      - "/serzhan-pool/digitalhouses/{{ item }}"
+      - "/serzhan-pool/digitalhouses/cert/{{ item }}"
+    creates: "/serzhan-pool/digitalhouses/cert/{{ item }}"
+    removes: "/serzhan-pool/digitalhouses/{{ item }}"
+  loop:
+    - serzhan-home-ha-mtls.p12
+    - serzhan-home-ha-mtls-password.txt
+  delegate_to: cf70_cert_media
+  become: true
+  no_log: true
+
+- name: Enforce administrator-only access to the two client files
+  ansible.builtin.file:
+    path: "/serzhan-pool/digitalhouses/cert/{{ item }}"
+    state: file
+    owner: root
+    group: admin_group
+    mode: '0660'
+  loop:
+    - serzhan-home-ha-mtls.p12
+    - serzhan-home-ha-mtls-password.txt
+  delegate_to: cf70_cert_media
+  become: true
+  no_log: true
+
+- name: Write HAOS Cloudflare HTTPS address as the third file
+  ansible.builtin.copy:
+    content: "https://serzhan-home-pve-ha-mtls.digitalhouses.vip\n"
+    dest: /serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-url.txt
+    owner: root
+    group: admin_group
+    mode: '0660'
+  delegate_to: cf70_cert_media
+  become: true
+
+- name: Verify PKCS12 structure with its existing password
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - pkcs12
+      - -in
+      - /serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
+      - -passin
+      - file:/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
+      - -info
+      - -noout
+  delegate_to: cf70_cert_media
+  become: true
+  changed_when: false
+  no_log: true
+
+- name: Verify all three files exist in cert
+  ansible.builtin.stat:
+    path: "/serzhan-pool/digitalhouses/cert/{{ item }}"
+  loop:
+    - serzhan-home-ha-mtls.p12
+    - serzhan-home-ha-mtls-password.txt
+    - serzhan-home-ha-mtls-url.txt
+  delegate_to: cf70_cert_media
+  become: true
+  register: cf70_cert_files
+  changed_when: false
+  no_log: true
+
+- name: Require three nonempty files
+  ansible.builtin.assert:
+    that:
+      - cf70_cert_files.results | map(attribute='stat.exists') | list == [true, true, true]
+      - cf70_cert_files.results | map(attribute='stat.size') | min | int > 0
+    fail_msg: HA70_CERT_DIRECTORY_INCOMPLETE
+  no_log: true
+
+- name: Report verified DH client certificate folder
+  ansible.builtin.debug:
+    msg:
+      - HA70_CERT_DIR=//192.168.11.223/DigitalHouses/cert
+      - HA70_CERT_P12=serzhan-home-ha-mtls.p12
+      - HA70_CERT_PASSWORD=serzhan-home-ha-mtls-password.txt
+      - HA70_CERT_URL=serzhan-home-ha-mtls-url.txt
+      - HA70_CERT_FILES=3
+      - HA70_PKCS12=VALID
