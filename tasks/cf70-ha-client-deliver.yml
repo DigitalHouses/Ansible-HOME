@@ -1,20 +1,3 @@
----
-- name: Verify new client certificate passes existing Cloudflare mTLS WAF
-  ansible.builtin.uri:
-    url: "https://{{ cf70_ha_name }}/"
-    client_cert: "{{ cf70_client_dir.path }}/cert.pem"
-    client_key: "{{ cf70_client_dir.path }}/key.pem"
-    status_code: [200, 401]
-    validate_certs: true
-    timeout: 15
-    use_proxy: false
-  register: cf70_client_positive
-  until: cf70_client_positive.status | default(0) in [200, 401]
-  retries: 5
-  delay: 3
-  changed_when: false
-  no_log: true
-
 - name: Copy import password into the same admin-only DH share
   ansible.builtin.copy:
     src: "{{ cf70_client_dir.path }}/password.txt"
@@ -37,11 +20,49 @@
   become: true
   no_log: true
 
+- name: Read signed client Subject for matching exact WAF identity
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - x509
+      - -in
+      - "{{ cf70_client_dir.path }}/cert.pem"
+      - -noout
+      - -subject
+      - -nameopt
+      - RFC2253
+  register: cf70_client_subject
+  changed_when: false
+
+- name: Verify new client certificate passes existing Cloudflare mTLS WAF
+  ansible.builtin.uri:
+    url: "https://{{ cf70_ha_name }}/"
+    client_cert: "{{ cf70_client_dir.path }}/cert.pem"
+    client_key: "{{ cf70_client_dir.path }}/key.pem"
+    status_code: [200, 301, 302, 400, 401, 403, 404, 500, 502, 503]
+    validate_certs: true
+    timeout: 15
+    use_proxy: false
+  register: cf70_client_positive
+  until: cf70_client_positive.status | default(0) in [200, 401]
+  retries: 5
+  delay: 3
+  changed_when: false
+  failed_when: false
+  no_log: true
+
 - name: Report Cloudflare client issuance and DH delivery without secrets
   ansible.builtin.debug:
     msg:
       - "HA70_CLIENT_CERT_ID={{ cf70_issued_client.json.result.id }}"
+      - "HA70_CLIENT_SUBJECT={{ cf70_client_subject.stdout | trim }}"
       - "HA70_CLIENT_CERT_EXPIRES={{ cf70_issued_client.json.result.expires_on }}"
-      - HA70_CLIENT_MTLS_TEST=PASSED
+      - "HA70_CLIENT_MTLS_HTTP={{ cf70_client_positive.status | default('UNKNOWN') }}"
       - HA70_CLIENT_P12=//192.168.11.223/DigitalHouses/serzhan-home-ha-mtls.p12
       - HA70_CLIENT_PASS=//192.168.11.223/DigitalHouses/serzhan-home-ha-mtls-password.txt
+
+- name: Require positive client-authenticated Cloudflare response
+  ansible.builtin.assert:
+    that:
+      - cf70_client_positive.status | default(0) in [200, 401]
+    fail_msg: "HA70_CLIENT_P12_DELIVERED_BUT_PUBLIC_MTLS_FAILED"
