@@ -44,7 +44,7 @@
   ansible.builtin.set_fact:
     cf70_resync_ha_entry: >-
       {{ cf70_config.json.result.config.ingress[-2] |
-         combine({'originRequest': {'connectTimeout': '30s'}}, recursive=true) }}
+         combine({'originRequest': {'connectTimeout': 30}}, recursive=true) }}
 
 - name: Preserve every ingress except the HAOS default timeout
   ansible.builtin.set_fact:
