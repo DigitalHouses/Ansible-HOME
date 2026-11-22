@@ -222,6 +222,9 @@ tasks:
           - {name: "06 — ТЕСТОВЫЙ RESTORE CT из CORE (проверить файлы и удалить тест)", value: restore-test}
           - {name: "07 — Проверить старые snapshots локального PBS после recreate (без изменений)", value: local-check}
           - {name: "08 — ВОССТАНОВИТЬ старый CT из локального PBS, проверить файлы и удалить тест", value: local-test}
+          - {name: "09 — ВКЛЮЧИТЬ ежедневный Push в CORE", value: schedule}
+          - {name: "10 — ОТКЛЮЧИТЬ расписание Push (сохранить Remote и копии)", value: unschedule}
+      - {name: DH_PBS_CORE_SCHEDULE, title: "Время ежедневного Push на PBS (HH:MM, по умолчанию 05:00)", type: "", target: "", required: false, default_value: "05:00", values: []}
   - name: "60-DigitalHouses Agents"
     playbook: playbooks/digitalhouses-agents.yml
     description: "После настройки медиасервера: установить, проверить или обновить PVE Agent и Plex Agent; без VM и ZFS операций"

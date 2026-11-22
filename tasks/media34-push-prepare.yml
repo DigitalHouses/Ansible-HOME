@@ -148,7 +148,6 @@
       - (home34_job_readback.stdout | from_json)['remote-ns'] == home34_site.id
       - (home34_job_readback.stdout | from_json)['sync-direction'] == 'push'
       - not (home34_job_readback.stdout | from_json)['remove-vanished'] | default(false) | bool
-      - (home34_job_readback.stdout | from_json).schedule | default('', true) == ''
     fail_msg: HOME34_PUSH_JOB_READBACK_MISMATCH
 
 - name: Confirm manual Push job is prepared but has not been started
@@ -157,4 +156,4 @@
       - "HOME34_PREPARED={{ home34_job }}"
       - "HOME34_TARGET={{ home34_core_ip }}/{{ home34_core_store }}/{{ home34_site.id }}"
       - HOME34_PUSH_EXECUTED=false
-      - HOME34_SCHEDULE=NONE
+      - "HOME34_SCHEDULE={{ (home34_job_readback.stdout | from_json).schedule | default('NONE', true) }}"

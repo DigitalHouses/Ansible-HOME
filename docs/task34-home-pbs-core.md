@@ -1,6 +1,46 @@
 # №34 — HOME PBS Push Sync → CORE PBS и Restore через Tailscale
 
 **Актуальная реализация:** `playbooks/media34-core-pbs.yml`.
+
+## Проверенный пилот и регулярная отправка (22.11.2026)
+
+Пилот `serzhan-home` завершил E2E: HOME №34 #133 и #134 — Push SUCCESS,
+CORE №50 — 21 snapshot в `pbs-core/serzhan-home`, Verify PASS,
+HOME №34 #140 — тестовый Restore CT из CORE, файлы проверены,
+временный CT 99834 удалён, работающие гости не затронуты.
+№34 #155 отдельно подтвердил Restore из локального PBS.
+
+После этого разрешено отдельно включить **штатное** расписание Push
+на HOME PBS (без cron, systemd unit или дополнительного сервиса).
+В Survey №34:
+
+- `schedule` — сохранить/обновить расписание ежедневного Push.
+  `DH_PBS_CORE_SCHEDULE=05:00` по умолчанию: 3 часа после
+  существующего локального backup в 02:00, по местному времени HOME PBS.
+  Отправка не запускается немедленно; первая автоматическая синхронизация
+  произойдёт по расписанию. `remove-vanished=false` сохраняется.
+- `unschedule` — удалить **только** расписание; Remote, Push Job,
+  локальные/центральные snapshots и credentials сохранить.
+- `audit`, `prepare`, `push`, `restore-storage` — прежние функции.
+  Повторный `prepare` больше не требует отсутствия расписания и
+  не перезаписывает уже настроенное время.
+
+Для **другого HOME** применяется тот же шаблон №34 с его собственными
+`/etc/digitalhouses/site-id`, site inventory и локальным datastore
+`pbs-<owner_slug>`. Remote, Sync Job и namespace формируются по
+`<site-id>`: `core-<site-id>`, `push-<site-id>` и
+`pbs-core/<site-id>`. На стороне CORE заранее должны быть созданы
+namespace, Push/Restore identities и токены именно этого HOME в
+профильном проекте CORE. В HOME №05 записываются выданные ему credentials
+и доверенный TLS fingerprint, ни один общий секрет между домами не нужен.
+HOME №34 **не настраивает CORE**.
+
+Последовательность нового дома: CORE provision → HOME №05 →
+№34 `audit` → `prepare` → ручной `push` → CORE Verify →
+тестовый HOME Restore → `schedule`. После настройки проверить
+`audit` и следующий автоматический PBS worker с состоянием OK.
+Это условие полноценной приёмки, а не только создания расписания.
+
 Старый `apply` для создания HOME read-only token под CORE Pull выведен из управления.
 Исторические Pull-логи в Git сохранены; ни текущий `audit`, ни `prepare`
 не создают токен для центрального Pull и не меняют CORE.
@@ -37,6 +77,9 @@
   источником, назначением, namespace и политикой удаления. Только
   запускает `proxmox-backup-manager sync-job run push-<home-id>`.
   Не запускается автоматически после `prepare`.
+- **schedule/unschedule**: разрешают или удаляют ежедневное штатное
+  расписание существующего Push Job на HOME PBS. Не запускают Push,
+  не меняют PVE backup jobs, CORE и retention.
 - **restore-storage**: через pinned SSH на HOME PVE подключает
   `pbs-core-restore` — native PVE PBS storage с CORE read-only Restore
   token и namespace `<home-id>`. Токен передаётся в штатный PVE
@@ -92,11 +135,9 @@ CORE credentials не выдаются в HOME и HOME не настраивае
    переписывает историю, `remove-vanished=false`.
 6. HOME №34 `restore-storage`; восстановить в **отдельный** VMID,
    убедиться в запуске тестового гостя и целостности данных.
-7. Только после успешного пилота согласовать Schedule Push после
-   локального backup (текущее локальное окно начинается 02:00,
-   время завершения следует проверить), retention в CORE и
-   остальные HOME. Нет автоматической синхронизации, пока E2E
-   не выполнен.
+7. После успешного пилота отдельным `schedule` включить Push после
+   локального backup (02:00), проверить первый автоматический PBS worker.
+   Retention в CORE управляется отдельно; для остальных HOME та же схема.
 
 B2 вне текущего этапа. Никаких операций с ZFS,
 backup jobs `dh-local-pbs-serzhan`, исходным datastore,

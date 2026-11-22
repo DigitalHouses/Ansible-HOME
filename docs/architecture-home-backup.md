@@ -1,7 +1,7 @@
 # HOME backup: Push to CORE and direct Restore
 
 **Решение принято 13.11.2026.** Проект DigitalHouses/Ansible-HOME.
-Прежняя модель CORE Pull устарела. HOME №34 реализует подготовку native PBS Push и PVE Restore storage; реальная E2E передача/восстановление ещё не принята.
+Прежняя модель CORE Pull устарела. HOME №34 реализует native PBS Push, PVE Restore storage и управление штатным расписанием. Пилот `serzhan-home` прошёл E2E: Push #133/#134, CORE Verify, Restore CT из CORE #140 (14.11.2026); регулярный Push включается только отдельным действием `schedule`.
 
 ## Потоки и ответственность
 
@@ -18,7 +18,7 @@
 | №05 HOME Credentials | Хранит выданные CORE Push и Restore credentials и TLS fingerprint CORE |
 | №30 Media Server | Развертывает VM, PBS и ZFS; `import` существующего диска или явно разрешённый `erase` |
 | №33 Local Backup | Рабочие локальные PBS datastore, PVE Backup Jobs и обслуживание |
-| №34 Central Backup | `audit`, `prepare`, `push`, `restore-storage`; Pull `apply` выведено из эксплуатации, реальный Restore тест отдельно |
+| №34 Central Backup | `audit`, `prepare`, `push`, `schedule`, `unschedule`, `restore-storage` и тестовый Restore; Pull `apply` выведено из эксплуатации |
 | №70 Cloudflare | Веб-доступ через Tunnel + Access, без WARP |
 | №71 Tailscale | Приватная связность HOME PVE и PBS с CORE PBS; контролируемые обновления |
 
@@ -39,7 +39,7 @@
 4. Иначе восстановить HOME → CORE маршрут и credentials из **внешней защищённой копии**, подключить CORE PBS на HOME PVE и восстановить VM/LXC в безопасный тестовый VMID, затем штатные VMID.
 5. Для зашифрованных PBS копий обеспечить независимое хранение ключей; Push сам по себе не доказывает восстановимость.
 
-Backblaze B2, MQTT и расписание Push Sync до E2E пилота не внедрять.
+Backblaze B2 и MQTT вне этого этапа. После E2E пилота штатное расписание Push разрешено только явным действием №34 `schedule` (ежедневно 05:00 по умолчанию); другие HOME подключаются через собственные namespace/credentials CORE.
 
 ## Исторический read-only аудит №70 (до решения Tailscale)
 
