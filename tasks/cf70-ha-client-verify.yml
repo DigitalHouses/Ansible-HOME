@@ -1,0 +1,42 @@
+---
+- name: Connect to HOME Media VM holding the client PKCS12 package
+  ansible.builtin.add_host:
+    name: cf70_verify_media
+    ansible_host: 192.168.11.223
+    ansible_connection: ssh
+    ansible_user: debian
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Check PKCS12 integrity on Media using the DH-stored import password
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - pkcs12
+      - -in
+      - /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
+      - -passin
+      - file:/serzhan-pool/digitalhouses/serzhan-home-ha-mtls-password.txt
+      - -info
+      - -noout
+  delegate_to: cf70_verify_media
+  become: true
+  changed_when: false
+  no_log: true
+
+- name: Confirm Home Assistant origin is available from Media
+  ansible.builtin.uri:
+    url: http://192.168.11.222/
+    status_code: 200
+    timeout: 10
+    use_proxy: false
+  delegate_to: cf70_verify_media
+  changed_when: false
+
+- name: Report successful PKCS12 integrity and local HAOS reachability checks
+  ansible.builtin.debug:
+    msg: HA70_DH_PKCS12=VALID HA70_LOCAL_HAOS_HTTP=200
