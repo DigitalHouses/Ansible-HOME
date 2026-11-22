@@ -1,0 +1,44 @@
+---
+- name: Generate private RSA key on trusted Semaphore runner
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - genpkey
+      - -algorithm
+      - RSA
+      - -out
+      - "{{ cf70_client_dir.path }}/key.pem"
+      - -pkeyopt
+      - rsa_keygen_bits:2048
+  changed_when: true
+  no_log: true
+
+- name: Create client CSR with exact protected hostname
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -key
+      - "{{ cf70_client_dir.path }}/key.pem"
+      - -out
+      - "{{ cf70_client_dir.path }}/client.csr"
+      - -subj
+      - "/CN={{ cf70_ha_name }}/O=DigitalHouses"
+  changed_when: true
+  no_log: true
+
+- name: Request Cloudflare Managed CA signed mTLS client certificate
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/client_certificates"
+    headers: "{{ cf70_headers }}"
+    method: POST
+    body_format: json
+    body:
+      csr: "{{ lookup('ansible.builtin.file', cf70_client_dir.path ~ '/client.csr') }}"
+      validity_days: 1095
+    status_code: 200
+    use_proxy: false
+  register: cf70_issued_client
+  changed_when: true
+  no_log: true
