@@ -42,3 +42,34 @@
   register: cf70_issued_client
   changed_when: true
   no_log: true
+
+- name: Confirm Cloudflare signed the intended client certificate
+  ansible.builtin.assert:
+    that:
+      - cf70_issued_client.json.success | bool
+      - cf70_issued_client.json.result.status == 'active'
+      - cf70_issued_client.json.result.common_name == cf70_ha_name
+      - "'-----BEGIN CERTIFICATE-----' in cf70_issued_client.json.result.certificate"
+    fail_msg: HA70_CLIENT_CERTIFICATE_ISSUE_FAILED
+  no_log: true
+
+- name: Store public signed certificate for PKCS12 packaging
+  ansible.builtin.copy:
+    content: "{{ cf70_issued_client.json.result.certificate }}"
+    dest: "{{ cf70_client_dir.path }}/cert.pem"
+    mode: '0600'
+  no_log: true
+
+- name: Generate random import password
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, '16']
+  register: cf70_client_pass
+  changed_when: false
+  no_log: true
+
+- name: Save import password in temporary runner directory
+  ansible.builtin.copy:
+    content: "{{ cf70_client_pass.stdout | trim }}\n"
+    dest: "{{ cf70_client_dir.path }}/password.txt"
+    mode: '0600'
+  no_log: true
