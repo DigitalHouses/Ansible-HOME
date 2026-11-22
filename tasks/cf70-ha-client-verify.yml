@@ -47,7 +47,7 @@
     cert=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
     passfile=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
     password="$(cat "$passfile")"
-    printf 'cert = "%s:%s"\\ncert-type = "P12"\\n' "$cert" "$password" |
+    printf 'cert = "%s:%s"\ncert-type = "P12"\n' "$cert" "$password" |
       curl --config - --noproxy '*' --silent --show-error --max-time 15 \
       --output /dev/null --write-out '%{http_code}' \
       https://serzhan-home-pve-ha-mtls.digitalhouses.vip/
