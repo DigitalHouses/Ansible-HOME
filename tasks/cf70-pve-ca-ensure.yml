@@ -68,7 +68,7 @@
   delegate_to: cf70_ca_managed_pve
   changed_when: false
 
-- name: Reload existing cloudflared only if its CA changed
+- name: Reload existing cloudflared only if its CA changed  # noqa: no-handler
   ansible.builtin.systemd_service:
     name: cloudflared.service
     state: restarted
