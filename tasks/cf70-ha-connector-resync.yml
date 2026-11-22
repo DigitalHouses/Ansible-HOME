@@ -1,0 +1,109 @@
+---
+# Force a new remote configuration revision without changing any ingress entry.
+# The HOME PVE connector has returned built-in 503 despite correct API ingress.
+- name: Verify existing HOME tunnel and exact HAOS route before resync
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+      - cf70_tunnel.id == '6a04d9cd-0b17-48f3-8366-9f86ea08cb24'
+      - cf70_tunnel.config_src == 'cloudflare'
+      - cf70_tunnel.status == 'healthy'
+      - cf70_pve_connector.stdout | trim == 'active'
+      - cf70_config.json.result.config.ingress[-1].service == 'http_status:404'
+      - cf70_config.json.result.config.ingress | selectattr('hostname', 'defined') | selectattr('hostname', 'equalto', 'serzhan-home-pve-ha-mtls.digitalhouses.vip') | map(attribute='service') | list == ['http://192.168.11.222:80']
+    fail_msg: HA70_REMOTE_RESYNC_GUARD_FAILED
+
+- name: Recheck unchanged shared Cloudflare remote config before republishing
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    headers: "{{ cf70_headers }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_resync_before
+  changed_when: false
+  no_log: true
+
+- name: Refuse republish if another operation changed the shared configuration
+  ansible.builtin.assert:
+    that:
+      - cf70_resync_before.json.result.config == cf70_config.json.result.config
+      - cf70_resync_before.json.result.version == cf70_config.json.result.version
+    fail_msg: HA70_RESYNC_REFUSED_CONCURRENT_TUNNEL_CHANGE
+
+- name: Republish same remote ingress config to trigger connector config event
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/accounts/{{ cf70_account_id }}/cfd_tunnel/{{ cf70_tunnel.id }}/configurations"
+    method: PUT
+    headers: "{{ cf70_headers }}"
+    body_format: json
+    body:
+      config: "{{ cf70_config.json.result.config }}"
+    use_proxy: false
+    status_code: 200
+  register: cf70_resync_put
+  changed_when: true
+  no_log: true
+
+- name: Require remote ingress content is preserved verbatim after resync
+  ansible.builtin.assert:
+    that:
+      - cf70_resync_put.json.success | bool
+      - cf70_resync_put.json.result.config == cf70_config.json.result.config
+    fail_msg: HA70_RESYNC_UNEXPECTED_INGRESS_CHANGE
+
+- name: Report resync version while preserving routes and certificates
+  ansible.builtin.debug:
+    msg:
+      - "HA70_REMOTE_CONFIG_VERSION_BEFORE={{ cf70_config.json.result.version }}"
+      - "HA70_REMOTE_CONFIG_VERSION_AFTER={{ cf70_resync_put.json.result.version | default('NOT_RETURNED') }}"
+      - HA70_REMOTE_CONFIG_INGRESS_UNCHANGED=true
+
+- name: Allow existing PVE connector to accept pushed configuration
+  ansible.builtin.pause:
+    seconds: 6
+
+- name: Select existing HOME Media VM for certificate-based edge test
+  ansible.builtin.add_host:
+    name: cf70_resync_media
+    ansible_host: 192.168.11.223
+    ansible_connection: ssh
+    ansible_user: debian
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Recheck Cloudflare HAOS HTTPS with existing DH certificate and private password
+  ansible.builtin.shell: |
+    set -euo pipefail
+    cert=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
+    passfile=/serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls-password.txt
+    password="$(cat "$passfile")"
+    printf 'cert = "%s:%s"\ncert-type = "P12"\n' "$cert" "$password" |
+      curl --config - --noproxy '*' --silent --show-error --max-time 20 \
+      --output /dev/null --write-out '%{http_code}' \
+      https://serzhan-home-pve-ha-mtls.digitalhouses.vip/
+  args:
+    executable: /bin/bash
+  delegate_to: cf70_resync_media
+  become: true
+  register: cf70_resync_http
+  retries: 6
+  delay: 5
+  until: cf70_resync_http.rc == 0 and cf70_resync_http.stdout | trim in ['200', '401']
+  changed_when: false
+  failed_when: false
+  no_log: true
+
+- name: Report the actual authenticated HTTPS result
+  ansible.builtin.debug:
+    msg: "HA70_POST_RESYNC_MTLS_HTTP={{ cf70_resync_http.stdout | default('UNKNOWN') | trim }}"
+
+- name: Require client-authenticated access to reach HAOS
+  ansible.builtin.assert:
+    that:
+      - cf70_resync_http.rc == 0
+      - cf70_resync_http.stdout | trim in ['200', '401']
+    fail_msg: HA70_REMOTE_CONFIG_RESYNC_DONE_BUT_EDGE_STILL_RETURNS_ERROR
