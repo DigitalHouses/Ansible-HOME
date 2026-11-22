@@ -16,14 +16,11 @@
       - "{{ home34_job }}"
       - --schedule
       - "{{ home34_schedule }}"
-      - --disable
-      - 'false'
   changed_when: true
   when:
     - home34_action == 'schedule'
     - >-
-      (home34_existing_job[0].schedule | default('', true)) != home34_schedule or
-      (home34_existing_job[0].disable | default(false) | bool)
+      (home34_existing_job[0].schedule | default('', true)) != home34_schedule
 
 - name: Remove only the managed Push schedule without deleting its configuration
   ansible.builtin.command:
@@ -51,9 +48,6 @@
       - >-
         (home34_schedule_readback.stdout | from_json).schedule | default('', true)
         == (home34_schedule if home34_action == 'schedule' else '')
-      - >-
-        home34_action != 'schedule' or
-        not (home34_schedule_readback.stdout | from_json).disable | default(false) | bool
     fail_msg: HOME34_PUSH_SCHEDULE_READBACK_MISMATCH
 
 - name: Report native Push schedule without starting a transfer
