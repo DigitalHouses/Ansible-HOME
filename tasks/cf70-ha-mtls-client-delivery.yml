@@ -1,0 +1,64 @@
+---
+- name: Connect to existing HOME Media VM for mTLS delivery
+  ansible.builtin.add_host:
+    name: cf70_ha_media
+    ansible_host: 192.168.11.223
+    ansible_connection: ssh
+    ansible_user: debian
+    ansible_python_interpreter: /usr/bin/python3
+    ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+    ansible_ssh_common_args: >-
+      -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+      -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts -o ConnectTimeout=7
+  changed_when: false
+
+- name: Inspect DH administrator share
+  ansible.builtin.stat:
+    path: /serzhan-pool/digitalhouses
+  delegate_to: cf70_ha_media
+  become: true
+  register: cf70_dh_dir
+
+- name: Confirm the existing DH administrator group is available
+  ansible.builtin.command:
+    argv: [getent, group, admin_group]
+  delegate_to: cf70_ha_media
+  become: true
+  changed_when: false
+
+- name: Check whether requested mTLS file already exists
+  ansible.builtin.stat:
+    path: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
+  delegate_to: cf70_ha_media
+  become: true
+  register: cf70_dh_p12
+
+- name: Require intended HOME DH directory and no existing client package
+  ansible.builtin.assert:
+    that:
+      - site_id == 'serzhan-home'
+      - cf70_ha_name == 'serzhan-home-pve-ha-mtls.digitalhouses.vip'
+      - cf70_dh_dir.stat.isdir | default(false)
+      - not cf70_dh_p12.stat.exists
+    fail_msg: HA70_DH_CLIENT_DESTINATION_NOT_READY
+
+- name: Issue client certificate and deliver private package into DH
+  block:
+    - name: Create private temporary workspace on Semaphore runner
+      ansible.builtin.tempfile:
+        state: directory
+        prefix: dh-ha-client-
+      register: cf70_client_dir
+
+    - name: Issue new Cloudflare client certificate with exact HAOS hostname
+      ansible.builtin.include_tasks: cf70-ha-client-issue.yml
+
+    - name: Test and publish encrypted PKCS12 to existing DH admin share
+      ansible.builtin.include_tasks: cf70-ha-client-deliver.yml
+  always:
+    - name: Delete ephemeral client private key and local password
+      ansible.builtin.file:
+        path: "{{ cf70_client_dir.path }}"
+        state: absent
+      when: cf70_client_dir is defined and cf70_client_dir.path is defined
+      no_log: true

@@ -1,0 +1,94 @@
+---
+- name: Generate private RSA key on trusted Semaphore runner
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - genpkey
+      - -algorithm
+      - RSA
+      - -out
+      - "{{ cf70_client_dir.path }}/key.pem"
+      - -pkeyopt
+      - rsa_keygen_bits:2048
+  changed_when: true
+  no_log: true
+
+- name: Create client CSR with exact protected hostname
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - req
+      - -new
+      - -key
+      - "{{ cf70_client_dir.path }}/key.pem"
+      - -out
+      - "{{ cf70_client_dir.path }}/client.csr"
+      - -subj
+      - "/CN={{ cf70_ha_name }}/O=DigitalHouses"
+  changed_when: true
+  no_log: true
+
+- name: Request Cloudflare Managed CA signed mTLS client certificate
+  ansible.builtin.uri:
+    url: "{{ cf70_api }}/zones/{{ cf70_zone_id }}/client_certificates"
+    headers: "{{ cf70_headers }}"
+    method: POST
+    body_format: json
+    body:
+      csr: "{{ lookup('ansible.builtin.file', cf70_client_dir.path ~ '/client.csr') }}"
+      validity_days: 1095
+    status_code: 200
+    use_proxy: false
+  register: cf70_issued_client
+  changed_when: true
+  no_log: true
+
+- name: Confirm Cloudflare signed the intended client certificate
+  ansible.builtin.assert:
+    that:
+      - cf70_issued_client.json.success | bool
+      - cf70_issued_client.json.result.status == 'active'
+      - cf70_issued_client.json.result.common_name == cf70_ha_name
+      - "'-----BEGIN CERTIFICATE-----' in cf70_issued_client.json.result.certificate"
+    fail_msg: HA70_CLIENT_CERTIFICATE_ISSUE_FAILED
+  no_log: true
+
+- name: Store public signed certificate for PKCS12 packaging
+  ansible.builtin.copy:
+    content: "{{ cf70_issued_client.json.result.certificate }}"
+    dest: "{{ cf70_client_dir.path }}/cert.pem"
+    mode: '0600'
+  no_log: true
+
+- name: Generate random import password
+  ansible.builtin.command:
+    argv: [openssl, rand, -hex, '16']
+  register: cf70_client_pass
+  changed_when: false
+  no_log: true
+
+- name: Save import password in temporary runner directory
+  ansible.builtin.copy:
+    content: "{{ cf70_client_pass.stdout | trim }}\n"
+    dest: "{{ cf70_client_dir.path }}/password.txt"
+    mode: '0600'
+  no_log: true
+
+- name: Package client cert and private key as password-protected PKCS12
+  ansible.builtin.command:
+    argv:
+      - openssl
+      - pkcs12
+      - -export
+      - -in
+      - "{{ cf70_client_dir.path }}/cert.pem"
+      - -inkey
+      - "{{ cf70_client_dir.path }}/key.pem"
+      - -out
+      - "{{ cf70_client_dir.path }}/client.p12"
+      - -name
+      - DigitalHouses HOME HAOS
+      - -passout
+      - "file:{{ cf70_client_dir.path }}/password.txt"
+  changed_when: true
+  no_log: true
