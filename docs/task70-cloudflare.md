@@ -103,14 +103,14 @@ Private route `192.168.11.223/32` пока оставляем как legacy бе
 
 ## HAOS mTLS на HOME `.222` (18–22.11.2026)
 
-Действия №70: `audit_ha_mtls` (только чтение), `publish_ha_mtls` (идемпотентная публикация).
+Действия №70: `audit_ha_mtls` (только чтение), `publish_ha_mtls` (идемпотентная публикация), `verify_ha_mtls_client` (сквозная проверка).
 Существующий hostname `serzhan-home-pve-ha-mtls.digitalhouses.vip` используется повторно.
 Сохраняются действующие Cloudflare Managed CA сертификат (CN строго равен hostname),
 WAF `block` при отсутствующем/отозванном сертификате или неверном CN,
 Access Exact Host `bypass`, единственный Tunnel `serzhan-home`, старые PVE маршруты.
 Публикация добавляет только ingress `http://192.168.11.222:80` до 404
 и переводит только старый CNAME этого hostname на UUID текущего Tunnel.
-Нет нового Tunnel, сертификатов, служб или ручных изменений CORE.
+Нового Tunnel и служб нет, CORE не изменялся. Клиентский сертификат Cloudflare Managed CA был выпущен отдельно и помещён в DH.
 
 **HAOS HTTP:** начиная с Home Assistant Core 2026.8 настройки HTTP перенесены
 из `configuration.yaml` в штатное хранилище `.storage/http`; после миграции YAML
