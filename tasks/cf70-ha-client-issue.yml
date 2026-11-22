@@ -37,11 +37,19 @@
     body:
       csr: "{{ lookup('ansible.builtin.file', cf70_client_dir.path ~ '/client.csr') }}"
       validity_days: 1095
-    status_code: 200
+    status_code: [200, 400, 401, 403, 422]
     use_proxy: false
   register: cf70_issued_client
-  changed_when: true
+  changed_when: cf70_issued_client.status | default(0) == 200
+  failed_when: false
   no_log: true
+
+- name: Report Cloudflare certificate API status without secrets
+  ansible.builtin.debug:
+    msg:
+      - "HA70_CERT_HTTP={{ cf70_issued_client.status | default('UNAVAILABLE') }}"
+      - "HA70_CERT_ERRORS={{ cf70_issued_client.json.errors | default([]) | map(attribute='code') | list }}"
+      - "HA70_CERT_MESSAGES={{ cf70_issued_client.json.errors | default([]) | map(attribute='message') | list }}"
 
 - name: Confirm Cloudflare signed the intended client certificate
   ansible.builtin.assert:
