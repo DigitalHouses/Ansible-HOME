@@ -1,0 +1,38 @@
+---
+- name: Verify new client certificate passes existing Cloudflare mTLS WAF
+  ansible.builtin.uri:
+    url: "https://{{ cf70_ha_name }}/"
+    client_cert: "{{ cf70_client_dir.path }}/cert.pem"
+    client_key: "{{ cf70_client_dir.path }}/key.pem"
+    status_code: [200, 401]
+    validate_certs: true
+    timeout: 15
+    use_proxy: false
+  register: cf70_client_positive
+  until: cf70_client_positive.status | default(0) in [200, 401]
+  retries: 5
+  delay: 3
+  changed_when: false
+  no_log: true
+
+- name: Copy encrypted P12 into the existing DigitalHouses share
+  ansible.builtin.copy:
+    src: "{{ cf70_client_dir.path }}/client.p12"
+    dest: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
+    owner: root
+    group: admin_group
+    mode: '0660'
+  delegate_to: cf70_ha_media
+  become: true
+  no_log: true
+
+- name: Copy import password into the same admin-only DH share
+  ansible.builtin.copy:
+    src: "{{ cf70_client_dir.path }}/password.txt"
+    dest: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls-password.txt
+    owner: root
+    group: admin_group
+    mode: '0660'
+  delegate_to: cf70_ha_media
+  become: true
+  no_log: true
