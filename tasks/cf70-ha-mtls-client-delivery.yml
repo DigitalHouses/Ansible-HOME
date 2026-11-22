@@ -28,7 +28,7 @@
 
 - name: Check whether requested mTLS file already exists
   ansible.builtin.stat:
-    path: /serzhan-pool/digitalhouses/serzhan-home-ha-mtls.p12
+    path: /serzhan-pool/digitalhouses/cert/serzhan-home-ha-mtls.p12
   delegate_to: cf70_ha_media
   become: true
   register: cf70_dh_p12
