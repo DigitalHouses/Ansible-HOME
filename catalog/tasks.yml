@@ -286,3 +286,4 @@ tasks:
   - name: "37-HAOS PostgreSQL Recorder"
     playbook: playbooks/home-haos-recorder.yml
     description: "HAOS VM2222: подключить Recorder к PostgreSQL CT1224, сохранить параметры и SQLite; проверка states, настройка установленного DH Recorder App"
+    survey_vars: []
