@@ -1,0 +1,54 @@
+---
+- name: Read-only HOME HAOS memory diagnostics
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files: [/etc/digitalhouses/pve.yml]
+  tasks:
+    - name: Register HOME PVE
+      ansible.builtin.add_host:
+        name: memory_pve
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      changed_when: false
+- name: Read existing HAOS VM2222 memory and container statistics
+  hosts: memory_pve
+  gather_facts: false
+  tasks:
+    - name: Query guest memory and Docker containers (no changes)
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - '2222'
+          - --timeout
+          - '60'
+          - --
+          - /bin/sh
+          - -c
+          - |
+            echo '=== GUEST MEMORY ==='
+            grep -E '^(MemTotal|MemFree|MemAvailable|Buffers|Cached|SReclaimable|Shmem|AnonPages|Slab|SwapTotal|SwapFree|Dirty|Writeback):' /proc/meminfo
+            echo '=== MEMORY PRESSURE ==='
+            cat /proc/pressure/memory
+            echo '=== CONTAINERS ==='
+            docker stats --no-stream --format '{% raw %}{{.Name}}|{{.MemUsage}}|{{.MemPerc}}|{{.CPUPerc}}|{{.PIDs}}{% endraw %}'
+            echo '=== PROCESSES RSS (KiB) ==='
+            for p in /proc/[0-9]*; do
+              awk '/^Name:/ {n=$2} /^VmRSS:/ {r=$2} END {if(r>0) print r,n}' "$p/status" 2>/dev/null
+            done | sort -nr | head -25
+            echo '=== RUNNING CONTAINERS ==='
+            docker ps --format '{% raw %}{{.Names}}|{{.Status}}{% endraw %}'
+      register: mem
+      changed_when: false
+      failed_when: mem.rc != 0 or (mem.stdout | from_json).exitcode | default(1) != 0
+    - name: Show memory measurements
+      ansible.builtin.debug:
+        msg: "{{ (mem.stdout | from_json)['out-data'].splitlines() }}"
