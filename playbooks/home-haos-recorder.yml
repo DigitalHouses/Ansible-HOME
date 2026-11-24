@@ -1,0 +1,179 @@
+---
+- name: "37 | Identify HOME HAOS and existing PostgreSQL"
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files: [/etc/digitalhouses/pve.yml]
+  tasks:
+    - name: Require HOME PVE and saved PostgreSQL password
+      ansible.builtin.assert:
+        that:
+          - (pve.ipv4.split('.') | last | int) == 220
+          - DH_POSTGRES_PASSWORD | default('', true) | length >= 8
+        fail_msg: HOME37_TASK05_POSTGRES_PASSWORD_REQUIRED
+      no_log: true
+
+    - name: Register existing HOME PVE for HAOS QEMU Guest Agent
+      ansible.builtin.add_host:
+        name: home37_pve
+        groups: home37_managed
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        home37_ha_ip: "{{ pve.ipv4.rsplit('.', 1)[0] ~ '.222' }}"
+        home37_pg_ip: "{{ pve.ipv4.rsplit('.', 1)[0] ~ '.224' }}"
+      changed_when: false
+
+- name: "37 | Configure Recorder in existing HOME HAOS"
+  hosts: home37_managed
+  gather_facts: false
+  become: true
+  vars:
+    home37_config_dir: /mnt/data/supervisor/homeassistant
+    home37_db_url: "postgresql://postgres:{{ DH_POSTGRES_PASSWORD | urlencode | replace('/', '%2F') }}@{{ home37_pg_ip }}:5432/homeassistant"
+  tasks:
+    - name: Verify PostgreSQL is ready before changing HAOS
+      ansible.builtin.command:
+        argv: [pct, exec, '1224', --, pg_isready, -h, "{{ home37_pg_ip }}", -p, '5432', -d, homeassistant]
+      changed_when: false
+
+    - name: Inspect HAOS Recorder configuration shape and app inventory without secrets
+      ansible.builtin.command:
+        argv:
+          - qm
+          - guest
+          - exec
+          - '2222'
+          - --
+          - /bin/sh
+          - -ec
+          - |
+            cd /mnt/data/supervisor/homeassistant
+            test -f configuration.yaml
+            if grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' configuration.yaml; then
+              echo RECORDER_INCLUDE
+            elif grep -Eq '^recorder:[[:space:]]*(#.*)?$' configuration.yaml; then
+              echo RECORDER_MAPPING
+            elif grep -Eq '^recorder:' configuration.yaml; then
+              echo RECORDER_UNSUPPORTED
+            else
+              echo RECORDER_ABSENT
+            fi
+            if [ -d packages ]; then
+              find packages -type f \( -name '*.yaml' -o -name '*.yml' \) -exec grep -lE '^[[:space:]]*db_url[[:space:]]*:' {} \;
+            fi
+            if command -v curl >/dev/null 2>&1 && docker inspect hassio_cli >/dev/null 2>&1; then
+              if docker inspect --format '{% raw %}{{range .Config.Env}}{{println .}}{{end}}{% endraw %}' hassio_cli | grep -q '^SUPERVISOR_TOKEN=.'; then
+                echo SUPERVISOR_OPTIONS_TRANSPORT_AVAILABLE
+              fi
+            fi
+            echo APP_INVENTORY
+            /usr/bin/ha apps --raw-json
+      register: home37_probe
+      changed_when: false
+      failed_when: home37_probe.rc != 0 or (home37_probe.stdout | from_json).exitcode | default(1) != 0
+      no_log: true
+
+    - name: Extract nonsecret Recorder configuration shape
+      ansible.builtin.set_fact:
+        home37_probe_lines: "{{ (home37_probe.stdout | from_json)['out-data'].split('APP_INVENTORY')[0].splitlines() }}"
+        home37_apps: "{{ ((home37_probe.stdout | from_json)['out-data'].split('APP_INVENTORY')[1] | trim | from_json).data.addons | default([]) }}"
+      no_log: true
+
+    - name: Report audit information
+      ansible.builtin.debug:
+        msg:
+          - "{{ home37_probe_lines }}"
+          - "DH Recorder App installed={{ home37_apps | selectattr('slug', 'search', 'digitalhouses_recorder_app$') | list | length > 0 }}"
+
+    - name: Require unambiguous Recorder db_url ownership
+      ansible.builtin.assert:
+        that:
+          - home37_probe_lines[0] in ['RECORDER_MAPPING', 'RECORDER_ABSENT', 'RECORDER_INCLUDE']
+          - home37_probe_lines | reject('equalto', 'SUPERVISOR_OPTIONS_TRANSPORT_AVAILABLE') | list | length == 1
+        fail_msg: HOME37_RECORDER_DB_URL_IN_PACKAGE_OR_UNSUPPORTED_CONFIG
+
+    - name: Apply Recorder connection and validate configuration
+      when: DH_HOME37_ACTION | default('audit') == 'apply'
+      block:
+        - name: Update only Recorder db_url and its managed secret
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --pass-stdin, '1', --, /bin/sh, -ec, "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/haos37-recorder-config.sh') }}"]
+            stdin: "{{ home37_db_url | to_json }}"
+            expand_argument_vars: false
+          register: home37_edit
+          changed_when: "'CHANGED' in ((home37_edit.stdout | from_json)['out-data'] | default(''))"
+          failed_when: home37_edit.rc != 0 or (home37_edit.stdout | from_json).exitcode | default(1) != 0
+          no_log: true
+
+        - name: Validate native HAOS configuration before restarting
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --timeout, '180', --, /usr/bin/ha, core, check]
+          register: home37_check
+          changed_when: false
+          failed_when: home37_check.rc != 0 or (home37_check.stdout | from_json).exitcode | default(1) != 0
+          no_log: true
+          when: home37_edit.changed
+
+        - name: Restart only Home Assistant Core after valid configuration change
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --timeout, '180', --, /usr/bin/ha, core, restart]
+          register: home37_restart
+          changed_when: true
+          failed_when: home37_restart.rc != 0 or (home37_restart.stdout | from_json).exitcode | default(1) != 0
+          no_log: true
+          when: home37_edit.changed
+
+        - name: Confirm HAOS Recorder is actually writing fresh PostgreSQL states
+          ansible.builtin.command:
+            argv:
+              - pct
+              - exec
+              - '1224'
+              - --
+              - runuser
+              - -u
+              - postgres
+              - --
+              - psql
+              - -X
+              - -tA
+              - -d
+              - homeassistant
+              - -c
+              - "SELECT EXISTS (SELECT 1 FROM states WHERE last_updated_ts > extract(epoch FROM now()) - 120);"
+          register: home37_states
+          changed_when: false
+          until: home37_states.rc == 0 and home37_states.stdout | trim == 't'
+          retries: 30
+          delay: 5
+      rescue:
+        - name: Restore only files changed by this run if validation or activation failed
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --, /bin/sh, -ec, "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/haos37-recorder-config.sh') }}", sh, rollback]
+            expand_argument_vars: false
+          register: home37_rollback
+          changed_when: true
+          failed_when: home37_rollback.rc != 0 or (home37_rollback.stdout | from_json).exitcode | default(1) != 0
+          no_log: true
+          when: home37_edit is defined and home37_edit.changed
+        - name: Restart Core using restored configuration when it had been restarted
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --timeout, '180', --, /usr/bin/ha, core, restart]
+          register: home37_recover
+          changed_when: true
+          failed_when: home37_recover.rc != 0 or (home37_recover.stdout | from_json).exitcode | default(1) != 0
+          no_log: true
+          when: home37_restart is defined and home37_restart is not skipped
+        - name: Report Recorder setup failure without exposing credentials
+          ansible.builtin.fail:
+            msg: HOME37_RECORDER_APPLY_FAILED (configuration restored if modified)
+
+    - name: Report HAOS Recorder result
+      ansible.builtin.debug:
+        msg: "HOME37={{ 'PASS PostgreSQL states verified' if DH_HOME37_ACTION | default('audit') == 'apply' else 'AUDIT only' }}"

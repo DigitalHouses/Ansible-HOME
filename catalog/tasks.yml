@@ -282,3 +282,17 @@ tasks:
   - name: "36-Uptime Kuma HOME"
     playbook: playbooks/home-uptime.yml
     description: "CT1237: Uptime Kuma; создаёт отсутствующий LXC, сохраняет существующие мониторы и настройки"
+
+  - name: "37-HAOS PostgreSQL Recorder"
+    playbook: playbooks/home-haos-recorder.yml
+    description: "HAOS VM2222: подключить Recorder к PostgreSQL CT1224, сохранить остальные параметры и SQLite; проверка конфигурации и записи states"
+    survey_vars:
+      - name: DH_HOME37_ACTION
+        title: "HAOS Recorder — действие"
+        type: enum
+        target: ""
+        required: true
+        default_value: audit
+        values:
+          - {name: "Проверить конфигурацию без изменений", value: audit}
+          - {name: "Подключить Recorder к PostgreSQL", value: apply}

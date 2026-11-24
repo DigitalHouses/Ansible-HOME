@@ -68,3 +68,7 @@ directly. UI remains accessible only on the HOME LAN.
 These tasks operate **only on the local HOME PVE**, creating their own LXC.
 They do not modify CORE, Cloudflare, media VM, backup jobs,
 or unrelated VM/LXC (task 33 separately manages the PBS exclusions). Destructive recreation is not supported.
+
+## Task 37: HAOS PostgreSQL Recorder
+
+Existing HOME HAOS VM2222 (.222) is managed through PVE QEMU Guest Agent, no new SSH service or API token. Task 37 connects the native Recorder to CT1224 (.224) using the task 05 PostgreSQL secret. It preserves existing Recorder options, validates HA Core configuration and verifies fresh states in PostgreSQL. Existing SQLite data is untouched; no migration. The audit mode does not make changes. DH Recorder App presence is reported; its options are managed separately until the native Supervisor options transport is verified.
