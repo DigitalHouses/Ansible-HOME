@@ -170,23 +170,40 @@
       changed_when: true
       when: home35_hba.rc != 0
 
-    - name: Read PostgreSQL service state
+    - name: Read actual PostgreSQL 17 main cluster service state
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, is-active, postgresql]
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, is-active, "postgresql@{{ home35_pg_version }}-main.service"]
       register: home35_service
       changed_when: false
       failed_when: false
 
-    - name: Start or restart PostgreSQL only if necessary
+    - name: Read PostgreSQL cluster startup log if not active
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, restart, postgresql]
+        argv: [pct, exec, "{{ home_lxc_id }}", --, tail, -n, "20", "/var/log/postgresql/postgresql-{{ home35_pg_version }}-main.log"]
+      register: home35_pg_start_log
+      changed_when: false
+      failed_when: false
+      when: home35_service.stdout | trim != 'active'
+
+    - name: Report failed cluster startup log
+      ansible.builtin.debug:
+        var: home35_pg_start_log.stdout_lines
+      when: home35_service.stdout | trim != 'active'
+
+    - name: Start or restart the actual PostgreSQL cluster only if necessary
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, restart, "postgresql@{{ home35_pg_version }}-main.service"]
       changed_when: true
       when: home35_hba.rc != 0 or home35_net_diff or home35_service.stdout | trim != 'active'
 
     - name: Require native PostgreSQL service readiness
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, pg_isready, -h, "{{ home_lxc_ip }}", -p, "5432"]
+      register: home35_pg_ready
       changed_when: false
+      until: home35_pg_ready.rc == 0
+      retries: 10
+      delay: 2
 
     - name: Check existing Home Assistant database encoding
       ansible.builtin.command:
