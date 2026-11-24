@@ -91,19 +91,26 @@
           - "{{ home37_probe_lines }}"
           - "DH Recorder App installed={{ home37_apps | selectattr('slug', 'search', 'digitalhouses_recorder_app$') | list | length > 0 }}"
 
-    - name: Require unambiguous Recorder db_url ownership
+    - name: Select existing Recorder package and installed DH Recorder App
+      ansible.builtin.set_fact:
+        home37_packages: "{{ home37_probe_lines | select('match', '^packages/') | list }}"
+        home37_recorder_apps: "{{ home37_apps | selectattr('slug', 'search', 'digitalhouses_recorder_app$') | list }}"
+
+    - name: Require unambiguous Recorder db_url ownership for apply
       ansible.builtin.assert:
         that:
           - home37_probe_lines[0] in ['RECORDER_MAPPING', 'RECORDER_ABSENT', 'RECORDER_INCLUDE']
-          - home37_probe_lines | reject('equalto', 'SUPERVISOR_OPTIONS_TRANSPORT_AVAILABLE') | list | length == 1
-        fail_msg: HOME37_RECORDER_DB_URL_IN_PACKAGE_OR_UNSUPPORTED_CONFIG
+          - home37_packages | length <= 1
+          - home37_packages | length == 0 or home37_probe_lines[0] == 'RECORDER_ABSENT'
+        fail_msg: HOME37_RECORDER_DB_URL_AMBIGUOUS
+      when: DH_HOME37_ACTION | default('audit') == 'apply'
 
     - name: Apply Recorder connection and validate configuration
       when: DH_HOME37_ACTION | default('audit') == 'apply'
       block:
         - name: Update only Recorder db_url and its managed secret
           ansible.builtin.command:
-            argv: [qm, guest, exec, '2222', --pass-stdin, '1', --, /bin/sh, -ec, "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/haos37-recorder-config.sh') }}"]
+            argv: [qm, guest, exec, '2222', --pass-stdin, '1', --, /bin/sh, -ec, "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/haos37-recorder-config.sh') }}", sh, "{{ home37_packages | first | default('') }}"]
             stdin: "{{ home37_db_url | to_json }}"
             expand_argument_vars: false
           register: home37_edit
@@ -173,6 +180,93 @@
         - name: Report Recorder setup failure without exposing credentials
           ansible.builtin.fail:
             msg: HOME37_RECORDER_APPLY_FAILED (configuration restored if modified)
+
+    - name: Configure the existing DH Recorder App using native Supervisor options API
+      when:
+        - DH_HOME37_ACTION | default('audit') == 'apply'
+        - home37_recorder_apps | length == 1
+      block:
+        - name: Require the existing Recorder SSH password and native options transport
+          ansible.builtin.assert:
+            that:
+              - DH_RECORDER_SSH_PASSWORD | default('', true) | length >= 8
+              - "'SUPERVISOR_OPTIONS_TRANSPORT_AVAILABLE' in home37_probe_lines"
+            fail_msg: HOME37_RECORDER_APP_OPTIONS_TRANSPORT_OR_TASK05_SECRET_MISSING
+          no_log: true
+
+        - name: Read current installed DH Recorder App options via native HA CLI
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --, /usr/bin/ha, apps, info, "{{ home37_recorder_apps[0].slug }}", --raw-json]
+          register: home37_app_info
+          changed_when: false
+          failed_when: home37_app_info.rc != 0 or (home37_app_info.stdout | from_json).exitcode | default(1) != 0
+          no_log: true
+
+        - name: Preserve unrelated DH Recorder App options
+          ansible.builtin.set_fact:
+            home37_app_current: "{{ ((home37_app_info.stdout | from_json)['out-data'] | from_json).data.options }}"
+          no_log: true
+
+        - name: Set only DH Recorder database and SSH connection options
+          ansible.builtin.set_fact:
+            home37_app_desired: >-
+              {{ home37_app_current | combine({
+                'database_type': 'postgresql',
+                'postgresql': {'host': home37_pg_ip, 'port': 5432, 'database': 'homeassistant',
+                  'username': 'postgres', 'password': DH_POSTGRES_PASSWORD},
+                'storage': {'source': 'automatic', 'ssh_host': home37_pg_ip, 'ssh_port': 22,
+                  'ssh_username': 'dh_recorder', 'ssh_password': DH_RECORDER_SSH_PASSWORD, 'path': ''}
+              }, recursive=true) }}
+          no_log: true
+
+        - name: Update changed app options through the existing Supervisor CLI identity
+          ansible.builtin.command:
+            argv:
+              - qm
+              - guest
+              - exec
+              - '2222'
+              - --pass-stdin
+              - '1'
+              - --
+              - /bin/sh
+              - -ec
+              - |
+                umask 077
+                payload=$(mktemp)
+                trap 'rm -f "$payload"' EXIT HUP INT TERM
+                cat > "$payload"
+                token=$(docker inspect --format '{% raw %}{{range .Config.Env}}{{println .}}{{end}}{% endraw %}' hassio_cli | sed -n 's/^SUPERVISOR_TOKEN=//p')
+                ip=$(docker inspect --format '{% raw %}{{(index .NetworkSettings.Networks "hassio").IPAddress}}{% endraw %}' hassio_supervisor)
+                test -n "$token" && test -n "$ip"
+                printf 'header = "Authorization: Bearer %s"\n' "$token" |
+                  curl -fsS --config - --max-time 30 -H 'Content-Type: application/json' \
+                  --data-binary "@$payload" "http://$ip/addons/$1/options"
+              - sh
+              - "{{ home37_recorder_apps[0].slug }}"
+            stdin: "{{ {'options': home37_app_desired} | to_json }}"
+            expand_argument_vars: false
+          register: home37_app_update
+          changed_when: true
+          failed_when: >-
+            home37_app_update.rc != 0 or
+            (home37_app_update.stdout | from_json).exitcode | default(1) != 0 or
+            ((home37_app_update.stdout | from_json)['out-data'] | from_json).result != 'ok'
+          when: home37_app_desired != home37_app_current
+          no_log: true
+
+        - name: Restart the installed DH Recorder App only when options change
+          ansible.builtin.command:
+            argv: [qm, guest, exec, '2222', --timeout, '120', --, /usr/bin/ha, apps, restart, "{{ home37_recorder_apps[0].slug }}"]
+          register: home37_app_restart
+          changed_when: true
+          failed_when: home37_app_restart.rc != 0 or (home37_app_restart.stdout | from_json).exitcode | default(1) != 0
+          when: home37_app_update is changed
+          no_log: true
+
+        - name: Report app settings configured (telemetry preference preserved)
+          ansible.builtin.debug:
+            msg: "DH_RECORDER_APP=CONFIGURED"
 
     - name: Report HAOS Recorder result
       ansible.builtin.debug:

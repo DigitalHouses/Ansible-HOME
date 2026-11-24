@@ -24,7 +24,12 @@ count=$(grep -c '^recorder:' "$config" || :)
 test "$count" -le 1
 mode=direct
 target=$config
-if grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' "$config"; then
+if [ -n "${1:-}" ]; then
+  case "$1" in packages/*.yaml|packages/*.yml) target=$1;; *) exit 2;; esac
+  test -f "$target"
+  grep -Eq '^recorder:[[:space:]]*(#.*)?$' "$target"
+  count=1
+elif grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' "$config"; then
   target=$(sed -n 's/^recorder:[[:space:]]*!include[[:space:]]*\([A-Za-z0-9_./-]*\.yaml\)[[:space:]]*$/\1/p' "$config")
   case "$target" in ''|/*|*..*) exit 2;; esac
   test -f "$target"
@@ -32,17 +37,24 @@ if grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' "$config"; then
 elif [ "$count" -eq 1 ]; then
   grep -Eq '^recorder:[[:space:]]*(#.*)?$' "$config"
 fi
-# Replacing the db_url scalar is safe only when it is a simple one-line value.
+# Prefer the existing !secret name: a synchronized/local package need not be edited.
 if [ "$mode" = direct ]; then
-  if [ "$count" -eq 0 ]; then
-    # Append new ordinary recorder mapping.
-    :
-  fi
+  secret_key=$(awk '
+    /^recorder:[[:space:]]*(#.*)?$/ { inside=1; next }
+    inside && /^[^[:space:]#]/ { inside=0 }
+    inside && /^  db_url:[[:space:]]*!secret[[:space:]]+/ {print $3}
+  ' "$target")
+else
+  secret_key=$(awk '/^db_url:[[:space:]]*!secret[[:space:]]+/ {print $3}' "$target")
 fi
+case "$secret_key" in ''|*[!A-Za-z0-9_]*)
+  secret_key=dh_recorder_db_url
+  ;;
+esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-awk -v mode="$mode" '
-  function add() { if (!done) { print (mode=="direct" ? "  " : "") "db_url: !secret dh_recorder_db_url"; done=1 } }
+awk -v mode="$mode" -v key="$secret_key" '
+  function add() { if (!done) { print (mode=="direct" ? "  " : "") "db_url: !secret " key; done=1 } }
   mode=="include" {
     if ($0 ~ /^db_url[[:space:]]*:/) { if ($0 ~ /:[[:space:]]*[|>]/) exit 2; add(); next }
     print; next
@@ -58,11 +70,11 @@ awk -v mode="$mode" '
 ' "$target" > "$tmp/recorder"
 # Secret is JSON-quoted YAML-compatible scalar. Do not expose it in process arguments.
 if [ -e secrets.yaml ]; then
-  awk '!/^dh_recorder_db_url[[:space:]]*:/' secrets.yaml > "$tmp/secrets"
+  awk -v key="$secret_key" '$0 !~ ("^" key "[[:space:]]*:")' secrets.yaml > "$tmp/secrets"
 else
   : > "$tmp/secrets"
 fi
-printf 'dh_recorder_db_url: %s\n' "$secret" >> "$tmp/secrets"
+printf '%s: %s\n' "$secret_key" "$secret" >> "$tmp/secrets"
 if cmp -s "$tmp/recorder" "$target" && cmp -s "$tmp/secrets" secrets.yaml; then
   echo UNCHANGED
   exit 0
