@@ -11,6 +11,7 @@ tasks:
       - {name: DH_INPUT_PVE_ROOT_PASSWORD, title: "Proxmox — пароль root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_MEDIA_ROOT_PASSWORD, title: "Медиасервер — пароль Linux root / PBS root@pam (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_POSTGRES_PASSWORD, title: "PostgreSQL HOME — пароль пользователя postgres (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
+      - {name: DH_INPUT_RECORDER_SSH_PASSWORD, title: "DH Recorder — SSH пароль dh_recorder (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_UPTIME_ADMIN_USERNAME, title: "Uptime Kuma — логин администратора (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_UPTIME_ADMIN_PASSWORD, title: "Uptime Kuma — пароль администратора (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
       - {name: DH_INPUT_UPTIME_TELEGRAM_BOT_TOKEN, title: "Uptime Kuma — Telegram Bot Token (пусто — оставить прежний)", type: secret, target: env, required: false, values: []}
@@ -277,7 +278,7 @@ tasks:
 
   - name: "35-PostgreSQL HOME"
     playbook: playbooks/home-postgresql.yml
-    description: "CT1224: Debian 13, PostgreSQL, homeassistant UTF8, пароль postgres из №05; создать если отсутствует, сохранить данные"
+    description: "CT1224: Debian 13, PostgreSQL 17, homeassistant UTF8, postgres и SSH dh_recorder из №05; создать если отсутствует, сохранить данные"
   - name: "36-Uptime Kuma HOME"
     playbook: playbooks/home-uptime.yml
     description: "CT1237: Uptime Kuma; создаёт отсутствующий LXC, сохраняет существующие мониторы и настройки"

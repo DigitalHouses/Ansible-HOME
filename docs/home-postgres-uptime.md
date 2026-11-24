@@ -5,16 +5,21 @@
 - Dedicated Debian 13 LXC **CT1224**, IP **HOME .224**, 2 vCPU, 512 MiB RAM,
   512 MiB swap, 100 GiB on `local-lvm`; existing CT never recreated.
 - HOME task **05** stores `DH_POSTGRES_PASSWORD` as a Semaphore secret.
-  Empty Survey input retains the existing secret. Do not store it in Git.
-- PostgreSQL service and database `homeassistant` with **UTF8** encoding
+  It also stores `DH_RECORDER_SSH_PASSWORD` for the dedicated Linux SSH user
+  `dh_recorder` (no sudo). Empty Survey input retains existing secrets.
+  Do not store them in Git.
+- PostgreSQL 17 (native Debian package) service and database `homeassistant` with **UTF8** encoding
   and `postgres` owner; existing DB is preserved and wrong encoding blocks
   the run rather than recreating it.
 - PostgreSQL TCP authentication with SCRAM is limited to HOME HAOS (.222)
   and HOME Uptime (.237) for this database. HAOS Recorder configuration
   belongs to its own project and is **not** changed by HOME task 35.
-- The existing daily local PVE Backup Job (task 33) covers this CT.
-  LXC backup alone does not replace a quiescent SQL dump if point-in-time
-  database consistency becomes a requirement.
+- Task 35 installs OpenSSH and provisions `dh_recorder` with its own password
+  for DH Recorder App disk monitoring. SQL monitoring uses `postgres`.
+- Task 33 excludes CT1224 from new and existing managed PBS schedules.
+  No SQL dump or SQLite migration. After failure, provision an empty CT/DB.
+  Existing historical backups are not deleted. A fresh CT has a new SSH host
+  key; validate it before updating the Recorder App's stored SSH host key.
 
 ## Task 36: Uptime Kuma
 
@@ -56,5 +61,5 @@ directly. UI remains accessible only on the HOME LAN.
 ## Boundaries
 
 These tasks operate **only on the local HOME PVE**, creating their own LXC.
-They do not modify CORE, Cloudflare, media VM, existing backup jobs,
-or unrelated VM/LXC. Destructive recreation is not supported.
+They do not modify CORE, Cloudflare, media VM, backup jobs,
+or unrelated VM/LXC (task 33 separately manages the PBS exclusions). Destructive recreation is not supported.
