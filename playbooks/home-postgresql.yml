@@ -203,14 +203,8 @@
             IFS= read -r password
             current="$(getent shadow dh_recorder | cut -d: -f2)"
             case "$current" in
-              '$6
-      ansible.builtin.debug:
-        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres SSH=dh_recorder"
-*)
-                salt="$(printf '%s' "$current" | cut -d '
-      ansible.builtin.debug:
-        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres"
- -f3)"
+              '$6$'*)
+                salt="$(printf '%s' "$current" | cut -d '$' -f3)"
                 candidate="$(printf '%s\n' "$password" | openssl passwd -6 -salt "$salt" -stdin)"
                 if [ "$candidate" = "$current" ]; then
                   exit 0
@@ -220,6 +214,7 @@
             hash="$(printf '%s\n' "$password" | openssl passwd -6 -stdin)"
             printf 'dh_recorder:%s\n' "$hash" | chpasswd -e
             printf 'changed\n'
+        expand_argument_vars: false
         stdin: "{{ DH_RECORDER_SSH_PASSWORD }}\n"
       register: home35_recorder_password
       changed_when: "'changed' in home35_recorder_password.stdout_lines"
@@ -261,4 +256,4 @@
 
     - name: Report HOME PostgreSQL readiness
       ansible.builtin.debug:
-        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres"
+        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres SSH=dh_recorder"
