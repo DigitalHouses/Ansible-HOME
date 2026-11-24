@@ -67,8 +67,13 @@
             if [ -d packages ]; then
               find packages -type f \( -name '*.yaml' -o -name '*.yml' \) -exec grep -lE '^[[:space:]]*db_url[[:space:]]*:' {} \;
             fi
+            if command -v curl >/dev/null 2>&1 && docker inspect hassio_cli >/dev/null 2>&1; then
+              if docker inspect --format '{% raw %}{{range .Config.Env}}{{println .}}{{end}}{% endraw %}' hassio_cli | grep -q '^SUPERVISOR_TOKEN=.'; then
+                echo SUPERVISOR_OPTIONS_TRANSPORT_AVAILABLE
+              fi
+            fi
             echo APP_INVENTORY
-            /usr/bin/ha apps list --raw-json
+            /usr/bin/ha apps --raw-json
       register: home37_probe
       changed_when: false
       failed_when: home37_probe.rc != 0 or (home37_probe.stdout | from_json).exitcode | default(1) != 0
@@ -90,7 +95,7 @@
       ansible.builtin.assert:
         that:
           - home37_probe_lines[0] in ['RECORDER_MAPPING', 'RECORDER_ABSENT', 'RECORDER_INCLUDE']
-          - home37_probe_lines | length == 1
+          - home37_probe_lines | reject('equalto', 'SUPERVISOR_OPTIONS_TRANSPORT_AVAILABLE') | list | length == 1
         fail_msg: HOME37_RECORDER_DB_URL_IN_PACKAGE_OR_UNSUPPORTED_CONFIG
 
     - name: Apply Recorder connection and validate configuration
