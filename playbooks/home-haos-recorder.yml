@@ -85,7 +85,7 @@
         home37_apps: "{{ ((home37_probe.stdout | from_json)['out-data'].split('APP_INVENTORY')[1] | trim | from_json).data.addons | default([]) }}"
       no_log: true
 
-    - name: Report audit information
+    - name: Report current Recorder configuration
       ansible.builtin.debug:
         msg:
           - "{{ home37_probe_lines }}"
@@ -96,17 +96,15 @@
         home37_packages: "{{ home37_probe_lines | select('match', '^packages/') | list }}"
         home37_recorder_apps: "{{ home37_apps | selectattr('slug', 'search', 'digitalhouses_recorder_app$') | list }}"
 
-    - name: Require unambiguous Recorder db_url ownership for apply
+    - name: Require unambiguous Recorder db_url ownership
       ansible.builtin.assert:
         that:
           - home37_probe_lines[0] in ['RECORDER_MAPPING', 'RECORDER_ABSENT', 'RECORDER_INCLUDE']
           - home37_packages | length <= 1
           - home37_packages | length == 0 or home37_probe_lines[0] == 'RECORDER_ABSENT'
         fail_msg: HOME37_RECORDER_DB_URL_AMBIGUOUS
-      when: DH_HOME37_ACTION | default('audit') == 'apply'
 
     - name: Apply Recorder connection and validate configuration
-      when: DH_HOME37_ACTION | default('audit') == 'apply'
       block:
         - name: Update only Recorder db_url and its managed secret
           ansible.builtin.command:
@@ -183,7 +181,6 @@
 
     - name: Configure the existing DH Recorder App using native Supervisor options API
       when:
-        - DH_HOME37_ACTION | default('audit') == 'apply'
         - home37_recorder_apps | length == 1
       block:
         - name: Require the existing Recorder SSH password and native options transport
@@ -270,4 +267,4 @@
 
     - name: Report HAOS Recorder result
       ansible.builtin.debug:
-        msg: "HOME37={{ 'PASS PostgreSQL states verified' if DH_HOME37_ACTION | default('audit') == 'apply' else 'AUDIT only' }}"
+        msg: "HOME37=PASS PostgreSQL states verified"
