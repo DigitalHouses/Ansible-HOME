@@ -43,6 +43,60 @@
     - name: Ensure the dedicated PostgreSQL container
       ansible.builtin.include_tasks: ../tasks/home-lxc-ensure.yml
 
+    - name: Inspect current PostgreSQL container features
+      ansible.builtin.command:
+        argv: [pct, config, "{{ home_lxc_id }}", --current, "1"]
+      register: home35_console_config
+      changed_when: false
+
+    - name: Read current Debian LXC nesting features
+      ansible.builtin.set_fact:
+        home35_console_features: >-
+          {{ ((home35_console_config.stdout_lines | select('match', '^features: ')
+               | list | first | default('features: ')).split(': ', 1)[1]).split(',')
+             | reject('equalto', '') | list }}
+
+    - name: Inspect standard TTY service before repairing nesting
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, journalctl, -u, container-getty@1.service, -n, "12", --no-pager]
+      register: home35_console_before
+      changed_when: false
+      when: "'nesting=1' not in home35_console_features"
+
+    - name: Report the console failure before applying Debian 13 nesting
+      ansible.builtin.debug:
+        msg:
+          - "CT1224 features={{ home35_console_features }}"
+          - "{{ home35_console_before.stdout_lines }}"
+      when: "'nesting=1' not in home35_console_features"
+
+    - name: Enable nesting for modern systemd on the existing PostgreSQL container
+      when: "'nesting=1' not in home35_console_features"
+      block:
+        - name: Shut down only CT1224 cleanly
+          ansible.builtin.command:
+            argv: [pct, shutdown, "{{ home_lxc_id }}", --timeout, "60"]
+          changed_when: true
+
+        - name: Enable Debian 13 nesting while retaining other features
+          ansible.builtin.command:
+            argv: [pct, set, "{{ home_lxc_id }}", --features, "{{ ((home35_console_features | reject('match', '^nesting=') | list) + ['nesting=1']) | join(',') }}"]
+          changed_when: true
+
+        - name: Start the existing CT1224
+          ansible.builtin.command:
+            argv: [pct, start, "{{ home_lxc_id }}"]
+          changed_when: true
+
+    - name: Verify the default container TTY login service
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, is-active, container-getty@1.service]
+      register: home35_console_ready
+      changed_when: false
+      until: home35_console_ready.rc == 0 and home35_console_ready.stdout | trim == 'active'
+      retries: 10
+      delay: 2
+
     - name: Check PostgreSQL package installation in the guest
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}\\n", postgresql-17, openssh-server, openssl]

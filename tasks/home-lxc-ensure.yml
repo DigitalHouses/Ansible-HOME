@@ -110,6 +110,8 @@
       - "name=eth0,bridge=vmbr0,ip={{ home_lxc_ip }}/24,gw={{ (home_lxc_gateway.stdout | regex_search('default via ([0-9.]+)', '\\1')) | first }}"
       - --unprivileged
       - "1"
+      - --features
+      - nesting=1
       - --onboot
       - "1"
   changed_when: true
