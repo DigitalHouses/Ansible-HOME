@@ -134,9 +134,11 @@
           - home35_pg_version | default('') == '17'
         fail_msg: HOME35_POSTGRES_CLUSTER_UNEXPECTED
 
+    # Bind IPv4 at boot even if the static guest address is not yet assigned.
+    # Remote authentication remains restricted by the existing pg_hba rules.
     - name: Define the minimal HOME PostgreSQL listener
       ansible.builtin.set_fact:
-        home35_net_desired: "listen_addresses = 'localhost,{{ home_lxc_ip }}'\npassword_encryption = 'scram-sha-256'"
+        home35_net_desired: "listen_addresses = '0.0.0.0'\npassword_encryption = 'scram-sha-256'"
 
     - name: Read managed PostgreSQL network override
       ansible.builtin.command:
