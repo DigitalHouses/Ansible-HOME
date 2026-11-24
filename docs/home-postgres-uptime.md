@@ -16,7 +16,8 @@
   and `postgres` owner; existing DB is preserved and wrong encoding blocks
   the run rather than recreating it.
 - PostgreSQL TCP authentication with SCRAM is limited to HOME HAOS (.222)
-  and HOME Uptime (.237) for this database. HAOS Recorder configuration
+  and HOME Uptime (.237) for this database. HAOS (.222) can also connect to
+  the maintenance database `postgres` using SCRAM. HAOS Recorder configuration
   belongs to its own project and is **not** changed by HOME task 35.
 - Task 35 installs OpenSSH and provisions `dh_recorder` with its own password
   for DH Recorder App disk monitoring. SQL monitoring uses `postgres`.
