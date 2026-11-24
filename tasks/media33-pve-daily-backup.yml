@@ -1,6 +1,6 @@
 ---
 # Task 33 | One scheduled PVE vzdump backup job on the already validated PBS.
-# Explicitly excludes the VM hosting PBS (avoid circular backups).
+# Explicitly excludes the VM hosting PBS and disposable PostgreSQL CT1224.
 # Never invokes vzdump or any restore; creates the future schedule only.
 - name: Select the exact owner-local PBS backup job
   ansible.builtin.set_fact:
@@ -63,7 +63,15 @@
         media33_pve_backup_own[0].storage == media33_pve_storage_id
     fail_msg: MEDIA33_PVE_BACKUP_JOB_CONFLICT
 
-- name: Create scheduled daily PVE snapshots excluding PBS host VM
+- name: Calculate required exclusions preserving any existing additional exclusions
+  ansible.builtin.set_fact:
+    media33_pve_backup_required_exclude: "{{ [media_spec.vmid | string, '1224'] }}"
+    media33_pve_backup_current_exclude: >-
+      {{ ((media33_pve_backup_own | first | default({})).exclude | default('') | string).split(',')
+         | reject('equalto', '') | list }}
+
+- name: Create scheduled daily PVE snapshots excluding PBS host VM and PostgreSQL CT
+
   ansible.builtin.command:
     argv:
       - pvesh
@@ -82,7 +90,7 @@
       - --all
       - '1'
       - --exclude
-      - "{{ media_spec.vmid }}"
+      - "{{ media33_pve_backup_required_exclude | join(',') }}"
       - --remove
       - '0'
       - --notification-mode
@@ -92,13 +100,26 @@
   when: media33_pve_backup_own | length == 0
   changed_when: true
 
+- name: Exclude PostgreSQL from an existing managed backup schedule
+  ansible.builtin.command:
+    argv:
+      - pvesh
+      - set
+      - "/cluster/backup/{{ media33_pve_backup_job_id }}"
+      - --exclude
+      - "{{ (media33_pve_backup_current_exclude + media33_pve_backup_required_exclude) | unique | join(',') }}"
+  when:
+    - media33_pve_backup_own | length == 1
+    - media33_pve_backup_required_exclude | difference(media33_pve_backup_current_exclude) | length > 0
+  changed_when: true
+
 - name: Read the exact scheduled PVE backup job
   ansible.builtin.command:
     argv: [pvesh, get, "/cluster/backup/{{ media33_pve_backup_job_id }}", --output-format, json]
   register: media33_pve_backup_job_readback_raw
   changed_when: false
 
-- name: Verify PVE backup schedule only includes guests other than its PBS VM
+- name: Verify PVE backup schedule excludes its PBS VM and PostgreSQL CT
   ansible.builtin.assert:
     that:
       - (media33_pve_backup_job_readback_raw.stdout | from_json).storage == media33_pve_storage_id
@@ -107,8 +128,9 @@
       - (media33_pve_backup_job_readback_raw.stdout | from_json).schedule == media33_pve_backup_time
       - (media33_pve_backup_job_readback_raw.stdout | from_json)['all'] | int == 1
       - >-
-        (media33_pve_backup_job_readback_raw.stdout | from_json).exclude | string
-        == media_spec.vmid | string
+        media33_pve_backup_required_exclude | difference(
+          ((media33_pve_backup_job_readback_raw.stdout | from_json).exclude | string).split(',')
+        ) | length == 0
       - (media33_pve_backup_job_readback_raw.stdout | from_json).remove | default(0) | int == 0
       - (media33_pve_backup_job_readback_raw.stdout | from_json).enabled | default(1) | int == 1
     fail_msg: MEDIA33_PVE_BACKUP_JOB_READBACK_FAILED

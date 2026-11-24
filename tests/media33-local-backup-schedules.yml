@@ -22,7 +22,10 @@
              'Create named weekly PBS verify job only when absent') | first }}
         pve_create: >-
           {{ pve_job_tasks | selectattr('name', 'equalto',
-             'Create scheduled daily PVE snapshots excluding PBS host VM') | first }}
+             'Create scheduled daily PVE snapshots excluding PBS host VM and PostgreSQL CT') | first }}
+        pve_update: >-
+          {{ pve_job_tasks | selectattr('name', 'equalto',
+             'Exclude PostgreSQL from an existing managed backup schedule') | first }}
         client_package: >-
           {{ client_tasks | selectattr('name', 'equalto',
              'Install the official PBS Backup Client for noninteractive local backups') | first }}
@@ -53,6 +56,9 @@
           - pve_create['ansible.builtin.command'].argv[:3] == ['pvesh','create','/cluster/backup']
           - "'--exclude' in pve_create['ansible.builtin.command'].argv"
           - "'--all' in pve_create['ansible.builtin.command'].argv"
+          - "'1224' in (pve_job_tasks | to_json)"
+          - pve_update['ansible.builtin.command'].argv[:2] == ['pvesh','set']
+          - "'--exclude' in pve_update['ansible.builtin.command'].argv"
           - "'--remove' in pve_create['ansible.builtin.command'].argv"
           - pve_create.when == 'media33_pve_backup_own | length == 0'
           - client_package['ansible.builtin.apt'].name == 'proxmox-backup-client'

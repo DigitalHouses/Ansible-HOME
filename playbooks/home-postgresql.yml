@@ -10,7 +10,8 @@
         that:
           - (pve.ipv4.split('.') | last | int) == 220
           - DH_POSTGRES_PASSWORD | default('', true) | length >= 8
-        fail_msg: HOME35_PVE_IDENTITY_OR_TASK05_POSTGRES_PASSWORD_MISSING
+          - DH_RECORDER_SSH_PASSWORD | default('', true) | length >= 8
+        fail_msg: HOME35_PVE_IDENTITY_OR_TASK05_POSTGRES_OR_RECORDER_SSH_PASSWORD_MISSING
       no_log: true
 
     - name: Register the existing HOME PVE
@@ -44,22 +45,22 @@
 
     - name: Check PostgreSQL package installation in the guest
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}", postgresql]
+        argv: [pct, exec, "{{ home_lxc_id }}", --, dpkg-query, -W, "-f=${Status}\\n", postgresql-17, openssh-server, openssl]
       register: home35_package
       changed_when: false
       failed_when: false
 
-    - name: Refresh apt index only for missing PostgreSQL
+    - name: Refresh apt index for missing packages
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, update]
       changed_when: true
-      when: "'install ok installed' not in home35_package.stdout"
+      when: home35_package.rc != 0 or home35_package.stdout_lines | reject('equalto', 'install ok installed') | list | length > 0
 
-    - name: Install PostgreSQL only when absent
+    - name: Install PostgreSQL 17 and SSH packages when missing
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, postgresql]
+        argv: [pct, exec, "{{ home_lxc_id }}", --, apt-get, install, -y, postgresql-17, openssh-server, openssl]
       changed_when: true
-      when: "'install ok installed' not in home35_package.stdout"
+      when: home35_package.rc != 0 or home35_package.stdout_lines | reject('equalto', 'install ok installed') | list | length > 0
 
     - name: Read installed PostgreSQL cluster
       ansible.builtin.command:
@@ -76,7 +77,7 @@
       ansible.builtin.assert:
         that:
           - home35_clusters.stdout_lines | length == 1
-          - home35_pg_version | default('') is match('^[0-9]+$')
+          - home35_pg_version | default('') == '17'
         fail_msg: HOME35_POSTGRES_CLUSTER_UNEXPECTED
 
     - name: Define the minimal HOME PostgreSQL listener
@@ -175,6 +176,88 @@
       changed_when: false
       failed_when: "home35_accept.rc != 0 or home35_accept.stdout | trim != 'UTF8'"
       no_log: true
+
+    - name: Check the dedicated Recorder SSH account
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, id, dh_recorder]
+      register: home35_recorder_user
+      changed_when: false
+      failed_when: false
+
+    - name: Create the unprivileged Recorder SSH account
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, useradd, -m, -U, -s, /bin/sh, dh_recorder]
+      when: home35_recorder_user.rc != 0
+      changed_when: true
+
+    - name: Set Recorder SSH password only when it differs
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ home_lxc_id }}"
+          - --
+          - sh
+          - -ec
+          - |
+            IFS= read -r password
+            current="$(getent shadow dh_recorder | cut -d: -f2)"
+            case "$current" in
+              '$6
+      ansible.builtin.debug:
+        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres SSH=dh_recorder"
+*)
+                salt="$(printf '%s' "$current" | cut -d '
+      ansible.builtin.debug:
+        msg: "HOME35=PASS CT1224 {{ home_lxc_ip }}:5432 db=homeassistant encoding=UTF8 owner=postgres"
+ -f3)"
+                candidate="$(printf '%s\n' "$password" | openssl passwd -6 -salt "$salt" -stdin)"
+                if [ "$candidate" = "$current" ]; then
+                  exit 0
+                fi
+                ;;
+            esac
+            hash="$(printf '%s\n' "$password" | openssl passwd -6 -stdin)"
+            printf 'dh_recorder:%s\n' "$hash" | chpasswd -e
+            printf 'changed\n'
+        stdin: "{{ DH_RECORDER_SSH_PASSWORD }}\n"
+      register: home35_recorder_password
+      changed_when: "'changed' in home35_recorder_password.stdout_lines"
+      no_log: true
+
+    - name: Enable and start the guest SSH service
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, enable, --now, ssh]
+      changed_when: false
+
+    - name: Configure SSH password authentication only for dh_recorder
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ home_lxc_id }}"
+          - --
+          - sh
+          - -ec
+          - |
+            if ! grep -Fxq '# DH_RECORDER_SSH' /etc/ssh/sshd_config; then
+              printf '\n# DH_RECORDER_SSH\nMatch User dh_recorder\n    PasswordAuthentication yes\n' >> /etc/ssh/sshd_config
+              printf 'changed\n'
+            fi
+            /usr/sbin/sshd -t
+      register: home35_recorder_sshd
+      changed_when: "'changed' in home35_recorder_sshd.stdout_lines"
+
+    - name: Reload SSH when the guest configuration changed
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, reload, ssh]
+      when: home35_recorder_sshd.changed
+      changed_when: true
+
+    - name: Confirm disk metrics are accessible to the unprivileged account
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, runuser, -u, dh_recorder, --, df, -h, /]
+      changed_when: false
 
     - name: Report HOME PostgreSQL readiness
       ansible.builtin.debug:
