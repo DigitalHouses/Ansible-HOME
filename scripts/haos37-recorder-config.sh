@@ -17,8 +17,8 @@ if [ "${1:-}" = rollback ]; then
   rm -rf "$backup"
   exit 0
 fi
-IFS= read -r secret
-test -n "$secret"
+secret=$(cat)
+test -n "$secret" || { echo DH37_STAGE_STDIN >&2; exit 2; }
 # Support an ordinary mapping or a single relative include. Never replace an opaque YAML construct.
 count=$(grep -c '^recorder:' "$config" || :)
 test "$count" -le 1
@@ -26,8 +26,8 @@ mode=direct
 target=$config
 if [ -n "${1:-}" ]; then
   case "$1" in packages/*.yaml|packages/*.yml) target=$1;; *) exit 2;; esac
-  test -f "$target"
-  grep -Eq '^recorder:[[:space:]]*(#.*)?$' "$target"
+  test -f "$target" || { echo DH37_STAGE_PACKAGE_FILE >&2; exit 2; }
+  grep -Eq '^recorder:[[:space:]]*(#.*)?$' "$target" || { echo DH37_STAGE_PACKAGE_MAPPING >&2; exit 2; }
   count=1
 elif grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' "$config"; then
   target=$(sed -n 's/^recorder:[[:space:]]*!include[[:space:]]*\([A-Za-z0-9_./-]*\.yaml\)[[:space:]]*$/\1/p' "$config")

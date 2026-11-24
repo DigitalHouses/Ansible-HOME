@@ -104,6 +104,25 @@
           - home37_packages | length == 0 or home37_probe_lines[0] == 'RECORDER_ABSENT'
         fail_msg: HOME37_RECORDER_DB_URL_AMBIGUOUS
 
+    - name: Verify QEMU Guest Agent stdin with nonsecret input
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --pass-stdin, '1', --, /bin/sh, -ec, 'test "$(cat)" = DH37_PROBE && echo PASS']
+        stdin: DH37_PROBE
+        expand_argument_vars: false
+      register: home37_stdin_probe
+      changed_when: false
+      failed_when: home37_stdin_probe.rc != 0 or (home37_stdin_probe.stdout | from_json).exitcode | default(1) != 0
+
+    - name: Inspect existing Recorder package structure without revealing values
+      ansible.builtin.command:
+        argv: [qm, guest, exec, '2222', --, /bin/sh, -ec, 'cd /mnt/data/supervisor/homeassistant; awk ''/^[[:space:]]*recorder[[:space:]]*:/ {print "recorder_indent=" match($0,/[^[:space:]]/)-1} /^[[:space:]]*db_url[[:space:]]*:/ {print "db_url_indent=" match($0,/[^[:space:]]/)-1}'' "$1"', sh, "{{ home37_packages | first | default('configuration.yaml') }}"]
+      register: home37_package_shape
+      changed_when: false
+
+    - name: Report only nonsecret package structure
+      ansible.builtin.debug:
+        msg: "{{ (home37_package_shape.stdout | from_json)['out-data'] | default('') }}"
+
     - name: Apply Recorder connection and validate configuration
       block:
         - name: Update only Recorder db_url and its managed secret
@@ -112,7 +131,7 @@
             stdin: "{{ home37_db_url | to_json }}"
             expand_argument_vars: false
           register: home37_edit
-          changed_when: "'CHANGED' in ((home37_edit.stdout | from_json)['out-data'] | default(''))"
+          changed_when: "((home37_edit.stdout | from_json)['out-data'] | default('') | trim) == 'CHANGED'"
           failed_when: home37_edit.rc != 0 or (home37_edit.stdout | from_json).exitcode | default(1) != 0
           no_log: true
 
@@ -158,6 +177,13 @@
           retries: 30
           delay: 5
       rescue:
+        - name: Report safe Recorder editor failure diagnostics
+          ansible.builtin.debug:
+            msg:
+              - "QM_RC={{ home37_edit.rc | default(-1) }}"
+              - "GUEST_RC={{ (home37_edit.stdout | from_json).exitcode | default(-1) if home37_edit.rc | default(-1) == 0 else -1 }}"
+              - "STAGE={{ ((home37_edit.stdout | from_json)['err-data'] | default('') | regex_findall('DH37_STAGE_[A-Z_]+')) | join(',') if home37_edit.rc | default(-1) == 0 else 'QM' }}"
+          when: home37_edit is defined and home37_edit is failed
         - name: Restore only files changed by this run if validation or activation failed
           ansible.builtin.command:
             argv: [qm, guest, exec, '2222', --, /bin/sh, -ec, "{{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/haos37-recorder-config.sh') }}", sh, rollback]
