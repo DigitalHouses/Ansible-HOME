@@ -4,6 +4,10 @@
 
 - Dedicated Debian 13 LXC **CT1224**, IP **HOME .224**, 2 vCPU, 512 MiB RAM,
   512 MiB swap, 100 GiB on `local-lvm`; existing CT never recreated.
+- Native Proxmox TTY console: Debian 13 unprivileged LXC uses `nesting=1`
+  for systemd getty. Task 35 enables it on CT1224 if missing, with one clean
+  shutdown/start, and verifies `container-getty@1.service`. Console mode stays
+  unchanged. The existing Linux user `dh_recorder` can log in at the prompt.
 - HOME task **05** stores `DH_POSTGRES_PASSWORD` as a Semaphore secret.
   It also stores `DH_RECORDER_SSH_PASSWORD` for the dedicated Linux SSH user
   `dh_recorder` (no sudo). Empty Survey input retains existing secrets.
