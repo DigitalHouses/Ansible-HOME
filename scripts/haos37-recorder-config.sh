@@ -27,7 +27,7 @@ target=$config
 if [ -n "${1:-}" ]; then
   case "$1" in packages/*.yaml|packages/*.yml) target=$1;; *) exit 2;; esac
   test -f "$target" || { echo DH37_STAGE_PACKAGE_FILE >&2; exit 2; }
-  grep -Eq '^recorder:[[:space:]]*(#.*)?$' "$target" || { echo DH37_STAGE_PACKAGE_MAPPING >&2; exit 2; }
+  grep -Eq '^[[:space:]]*recorder:[[:space:]]*(#.*)?$' "$target" || { echo DH37_STAGE_PACKAGE_MAPPING >&2; exit 2; }
   count=1
 elif grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' "$config"; then
   target=$(sed -n 's/^recorder:[[:space:]]*!include[[:space:]]*\([A-Za-z0-9_./-]*\.yaml\)[[:space:]]*$/\1/p' "$config")
@@ -37,37 +37,51 @@ elif grep -Eq '^recorder:[[:space:]]*!include[[:space:]]+' "$config"; then
 elif [ "$count" -eq 1 ]; then
   grep -Eq '^recorder:[[:space:]]*(#.*)?$' "$config"
 fi
-# Prefer the existing !secret name: a synchronized/local package need not be edited.
-if [ "$mode" = direct ]; then
-  secret_key=$(awk '
-    /^recorder:[[:space:]]*(#.*)?$/ { inside=1; next }
-    inside && /^[^[:space:]#]/ { inside=0 }
-    inside && /^  db_url:[[:space:]]*!secret[[:space:]]+/ {print $3}
-  ' "$target")
+# Use the existing scalar's exact indent in package mappings, including named packages.
+# Keep an existing !secret reference byte-for-byte; only its value needs changing.
+if [ "$mode" = include ]; then
+  recorder_indent=-1
+  db_indent=0
 else
-  secret_key=$(awk '/^db_url:[[:space:]]*!secret[[:space:]]+/ {print $3}' "$target")
+  recorder_indent=$(awk '/^[ ]*recorder:[[:space:]]*(#.*)?$/ { print match($0,/[^ ]/)-1; exit }' "$target")
+  recorder_indent=${recorder_indent:-0}
+  db_indent=$((recorder_indent+2))
 fi
+secret_key=$(awk -v n="$db_indent" '
+  match($0,/[^ ]/) == n+1 && $0 ~ /^[ ]*db_url:[[:space:]]*!secret[[:space:]]+/ {print $3}
+' "$target")
 case "$secret_key" in ''|*[!A-Za-z0-9_]*)
   secret_key=dh_recorder_db_url
   ;;
 esac
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT HUP INT TERM
-awk -v mode="$mode" -v key="$secret_key" '
-  function add() { if (!done) { print (mode=="direct" ? "  " : "") "db_url: !secret " key; done=1 } }
-  mode=="include" {
-    if ($0 ~ /^db_url[[:space:]]*:/) { if ($0 ~ /:[[:space:]]*[|>]/) exit 2; add(); next }
-    print; next
-  }
-  /^recorder:[[:space:]]*(#.*)?$/ { inside=1; found=1; print; add(); next }
-  inside && /^[^[:space:]#]/ { inside=0 }
-  inside && /^  db_url[[:space:]]*:/ { if ($0 ~ /:[[:space:]]*[|>]/) exit 2; next }
-  { print }
-  END {
-    if (mode=="include") add()
-    else if (!found) { print ""; print "recorder:"; add() }
-  }
-' "$target" > "$tmp/recorder"
+if [ "$mode" = direct ] && [ "$count" -eq 0 ]; then
+  cat "$target" > "$tmp/recorder"
+  printf '\nrecorder:\n  db_url: !secret %s\n' "$secret_key" >> "$tmp/recorder"
+else
+  awk -v n="$db_indent" -v key="$secret_key" -v mode="$mode" -v r="$recorder_indent" '
+    function add() { if (!done) { printf "%*sdb_url: !secret %s\n", n, "", key; done=1 } }
+    /^[ ]*recorder:[[:space:]]*(#.*)?$/ {
+      if (mode=="direct" && match($0,/[^ ]/)==r+1) {
+        inside=1; found=1; print; next
+      }
+    }
+    {
+      if (inside && $0 ~ /^[ ]*[^ #]/ && match($0,/[^ ]/) <= r+1) {add(); inside=0}
+      if ((inside || mode=="include") && match($0,/[^ ]/) == n+1 && $0 ~ /^[ ]*db_url[[:space:]]*:/) {
+        if ($0 ~ /:[[:space:]]*[|>]/) exit 2
+        if ($0 ~ /:[[:space:]]*!secret[[:space:]]+/ && $3 == key && !done) {print; done=1}
+        else add()
+        next
+      }
+      print
+    }
+    END {
+      if (mode=="include" || inside) add()
+    }
+  ' "$target" > "$tmp/recorder"
+fi
 # Secret is JSON-quoted YAML-compatible scalar. Do not expose it in process arguments.
 if [ -e secrets.yaml ]; then
   awk -v key="$secret_key" '$0 !~ ("^" key "[[:space:]]*:")' secrets.yaml > "$tmp/secrets"
