@@ -243,10 +243,9 @@
       register: home35_recorder_sshd
       changed_when: "'changed' in home35_recorder_sshd.stdout_lines"
 
-    - name: Reload SSH when the guest configuration changed
+    - name: Restart SSH to apply validated guest configuration
       ansible.builtin.command:
-        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, reload, ssh]
-      when: home35_recorder_sshd.changed
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, restart, ssh]
       changed_when: true
 
     - name: Confirm disk metrics are accessible to the unprivileged account
