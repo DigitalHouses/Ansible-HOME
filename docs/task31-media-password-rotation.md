@@ -2,7 +2,7 @@
 
 ## Цель и статус
 
-Отдельная задача Semaphore `31-Сменить общий пароль медиасервера`, Ansible native only; без собственных Python-скриптов.
+Отдельная задача Semaphore `31-Пароль медиасервера`, Ansible native only; без собственных Python-скриптов.
 Режим `preflight` (по умолчанию) **не меняет пароли**, но проверяет текущий владелец-логин каждой активной службы.
 
 В режиме `apply` обновляются только: Samba owner, Jellyfin owner, Sambee owner, Radarr/Sonarr/Prowlarr Forms owner, qBittorrent owner, Filestash configuration-admin bcrypt. Filestash SMB passthrough работает через новый пароль Samba. Пароль `serzhan_admin`, Plex.com, MQTT, API-ключи интеграций не трогаются.

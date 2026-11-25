@@ -7,7 +7,7 @@
 - Restic **не создаёт** конфигурации, repository, снимков, заданий резервного копирования, service/timers, credentials. Никакого чтения или изменения существующих бэкапов.
 - Приёмка №33 проверяет команду `/usr/local/bin/restic version` с версией 0.19.1. Для проверки из корня PVE: `qm guest exec 2232 -- /usr/local/bin/restic version`.
 
-В Semaphore существующее имя шаблона остаётся **`33-rclone Web GUI`** (без создания дубликата); его playbook `playbooks/media-rclone-gui.yml` включает новый `tasks/media33-restic-apply.yml`. Повторное выполнение №33 разрешено для существующей VM 2232; ZFS/медиа-пользователи не изменяются.
+В Semaphore шаблон переименовывается с сохранением ID в **`33-HOME PBS + Restic`** (без создания дубликата); его playbook `playbooks/media-rclone-gui.yml` включает новый `tasks/media33-restic-apply.yml`. Повторное выполнение №33 разрешено для существующей VM 2232; ZFS/медиа-пользователи не изменяются.
 
 
 ## Dataset PBS: задача №33
