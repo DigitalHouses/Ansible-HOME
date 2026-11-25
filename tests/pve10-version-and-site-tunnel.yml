@@ -19,7 +19,7 @@
             (task_catalog.tasks | selectattr('name','equalto','70-Cloudflare') |
              first).survey_vars[0].default_value == 'audit'
           - >-
-            (task_catalog.tasks | selectattr('name','equalto','10-Настроить PVE') |
+            (task_catalog.tasks | selectattr('name','equalto','10-HOME PVE') |
              first).survey_vars | selectattr('name','equalto','DH_PVE_QUANTUM_UPDATE') |
              first | json_query('default_value') == 'no'
           - >-

@@ -75,6 +75,95 @@
           - bootstrap_templates[0].environment_id is number
         fail_msg: Invalid task 00; catalog sync aborted
 
+    - name: Проверить идентичность переименовываемых задач
+      ansible.builtin.assert:
+        that:
+          - matching | length <= 1
+          - matching | length == 0 or matching[0].app == 'ansible'
+          - matching | length == 0 or matching[0].playbook == item.playbook
+          - matching | length == 0 or matching[0].inventory_id == bootstrap_templates[0].inventory_id
+          - matching | length == 0 or matching[0].environment_id == bootstrap_templates[0].environment_id
+        fail_msg: "Конфликт имени или владельца задачи {{ item.name }}"
+      vars:
+        matching: "{{ templates.json | selectattr('name', 'in', [item.previous_name, item.name]) | list }}"
+      loop: "{{ catalog.tasks | selectattr('previous_name', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: Переименовать задачи с сохранением ID
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates/{{ previous[0].id }}"
+        method: PUT
+        body_format: json
+        headers:
+          Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+        body:
+          id: "{{ previous[0].id }}"
+          project_id: "{{ site_projects[0].id }}"
+          name: "{{ item.name }}"
+          app: "{{ previous[0].app }}"
+          description: "{{ item.description }}"
+          playbook: "{{ previous[0].playbook }}"
+          arguments: "{{ previous[0].arguments }}"
+          inventory_id: "{{ previous[0].inventory_id }}"
+          repository_id: "{{ previous[0].repository_id }}"
+          environment_id: "{{ previous[0].environment_id }}"
+          environment_ids: "{{ previous[0].environment_ids | default([previous[0].environment_id]) }}"
+          survey_vars: "{{ item.survey_vars | default(previous[0].survey_vars | default([])) }}"
+          type: "{{ previous[0].type | default('') }}"
+          autorun: "{{ previous[0].autorun | default(false) }}"
+          allow_override_args_in_task: "{{ previous[0].allow_override_args_in_task | default(false) }}"
+        use_proxy: false
+        status_code: [200, 204]
+      vars:
+        previous: "{{ templates.json | selectattr('name', 'equalto', item.previous_name) | list }}"
+      loop: "{{ catalog.tasks | selectattr('previous_name', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when: previous | length == 1
+      register: catalog_renames
+      changed_when: true
+      no_log: true
+
+    - name: Сохранить исходные ID переименованных задач
+      ansible.builtin.set_fact:
+        catalog_before_rename: "{{ templates.json }}"
+      when: catalog_renames.changed
+
+    - name: Прочитать каталог после переименования
+      ansible.builtin.uri:
+        url: "{{ semaphore_api }}/project/{{ site_projects[0].id }}/templates"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ token_file.content | b64decode | trim }}"
+        use_proxy: false
+        status_code: 200
+      register: catalog_after_rename
+      when: catalog_renames.changed
+      no_log: true
+
+    - name: Подтвердить сохранение ID задач
+      ansible.builtin.assert:
+        that:
+          - after | length == 1
+          - after[0].id == before[0].id
+          - catalog_after_rename.json | selectattr('name', 'equalto', item.previous_name) | list | length == 0
+        fail_msg: "Не удалось сохранить ID задачи {{ item.name }}"
+      vars:
+        before: "{{ catalog_before_rename | selectattr('name', 'equalto', item.previous_name) | list }}"
+        after: "{{ catalog_after_rename.json | selectattr('name', 'equalto', item.name) | list }}"
+      loop: "{{ catalog.tasks | selectattr('previous_name', 'defined') | list }}"
+      loop_control:
+        label: "{{ item.name }}"
+      when:
+        - catalog_renames.changed
+        - before | length == 1
+
+    - name: Использовать актуальный каталог задач
+      ansible.builtin.set_fact:
+        templates: "{{ catalog_after_rename }}"
+      when: catalog_renames.changed
+
     - name: Refuse invalid names and conflicting existing playbooks
       ansible.builtin.assert:
         that:
@@ -147,6 +236,10 @@
           repository_id: "{{ current_template.repository_id }}"
           environment_id: "{{ current_template.environment_id }}"
           survey_vars: "{{ desired_survey }}"
+          environment_ids: "{{ current_template.environment_ids | default([current_template.environment_id]) }}"
+          type: "{{ current_template.type | default('') }}"
+          autorun: "{{ current_template.autorun | default(false) }}"
+          allow_override_args_in_task: "{{ current_template.allow_override_args_in_task | default(false) }}"
         use_proxy: false
         status_code: [200, 204]
       vars:
@@ -234,6 +327,6 @@
     - name: Report catalog sync
       ansible.builtin.debug:
         msg: >-
-          Catalog checked for {{ site_id }}. Existing tasks kept;
+          Catalog checked for {{ site_id }}. Existing task IDs kept; names updated in place;
           missing templates added; descriptions and Surveys reconciled; only the known #30
           audit-to-native entrypoint may be updated. Nothing executed or deleted.

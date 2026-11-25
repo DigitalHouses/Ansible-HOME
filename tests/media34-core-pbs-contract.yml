@@ -12,7 +12,7 @@
     restore: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-restore-storage.yml') | from_yaml }}"
     recovery_test: "{{ lookup('ansible.builtin.file', root ~ '/tasks/media34-test-restore.yml') | from_yaml }}"
     creds: "{{ lookup('ansible.builtin.file', root ~ '/playbooks/obtain-site-credentials.yml') | from_yaml }}"
-    entries: "{{ catalog.tasks | selectattr('name', 'equalto', '34-HOME PBS для CORE') | list }}"
+    entries: "{{ catalog.tasks | selectattr('name', 'equalto', '34-HOME PBS → CORE') | list }}"
     entry05: "{{ catalog.tasks | selectattr('name', 'equalto', '05-Ввести и проверить credentials') | list }}"
   tasks:
     - name: Require safe default action and no legacy CORE Pull token action
@@ -22,16 +22,7 @@
           - entries[0].playbook == 'playbooks/media34-core-pbs.yml'
           - entries[0].survey_vars[0].default_value == 'audit'
           - entries[0].survey_vars[0]['values'] | map(attribute='value') | list == ['audit','prepare','push','restore-storage','restore-check','restore-test','local-check','local-test','schedule','unschedule']
-          - entries[0].survey_vars[0]['values'][0].name is search('01.*Проверить')
-          - entries[0].survey_vars[0]['values'][1].name is search('02.*НЕ отправлять')
-          - entries[0].survey_vars[0]['values'][2].name is search('03.*ОТПРАВИТЬ')
-          - entries[0].survey_vars[0]['values'][3].name is search('04.*восстановления')
-          - entries[0].survey_vars[0]['values'][4].name is search('05.*Проверить')
-          - entries[0].survey_vars[0]['values'][5].name is search('06.*RESTORE')
-          - entries[0].survey_vars[0]['values'][6].name is search('07.*локального PBS')
-          - entries[0].survey_vars[0]['values'][7].name is search('08.*ВОССТАНОВИТЬ')
-          - entries[0].survey_vars[0]['values'][8].name is search('09.*ежедневный Push')
-          - entries[0].survey_vars[0]['values'][9].name is search('10.*ОТКЛЮЧИТЬ')
+          - entries[0].survey_vars[0]['values'] | map(attribute='name') | list == ['Проверить соединение', 'Настроить Push', 'Запустить Push', 'Подключить CORE для Restore', 'Проверить Restore из CORE', 'Тестовый Restore из CORE', 'Проверить локальные копии', 'Тестовый Restore из HOME', 'Включить расписание Push', 'Отключить расписание Push']
           - entries[0].survey_vars[1].name == 'DH_PBS_CORE_SCHEDULE'
           - entries[0].survey_vars[1].default_value == '05:00'
           - entries[0].survey_vars[0].default_value == 'audit'
