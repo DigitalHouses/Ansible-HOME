@@ -1,0 +1,42 @@
+---
+- name: Connect to HOME PVE for read-only audit
+  hosts: runner
+  connection: local
+  gather_facts: false
+  vars_files: [/etc/digitalhouses/pve.yml]
+  tasks:
+    - ansible.builtin.add_host:
+        name: audit_pve
+        ansible_host: "{{ pve.ipv4 }}"
+        ansible_user: root
+        ansible_connection: ssh
+        ansible_python_interpreter: /usr/bin/python3
+        ansible_ssh_private_key_file: /var/lib/semaphore/.ssh/id_ed25519
+        ansible_ssh_common_args: >-
+          -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
+          -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+      changed_when: false
+- name: Read HOME shutdown evidence
+  hosts: audit_pve
+  gather_facts: false
+  tasks:
+    - ansible.builtin.shell: |
+        echo '=== DATE UPTIME BOOTS ==='
+        date -Is; uptime; last -x -F | head -20; journalctl --list-boots --no-pager | tail -8
+        echo '=== VM ==='
+        qm status 2222; qm config 2222 | grep -E '^(onboot|startup):'; qm list; pct list
+        echo '=== PREVIOUS BOOT TAIL ==='
+        journalctl -b -1 -n 100 --no-pager -o short-iso
+        echo '=== PREVIOUS BOOT RELEVANT ==='
+        journalctl -b -1 --no-pager -o short-iso | grep -Ei 'upsmon|nut-|FSD|LOWBATT|on battery|shutdown|poweroff|power key|thermal|watchdog|oom-kill|out of memory|hardware error|mce:|2222' | tail -150
+        echo '=== CURRENT BOOT RELEVANT ==='
+        journalctl -b --no-pager -o short-iso | grep -Ei 'upsmon|nut-|FSD|LOWBATT|shutdown|poweroff|power key|thermal|watchdog|oom-kill|out of memory|2222' | tail -90
+        echo '=== UPS ==='
+        systemctl is-active nut-monitor nut-server; for ups in $(upsc -l 127.0.0.1 2>/dev/null); do upsc "$ups@127.0.0.1" 2>/dev/null | grep -E '^(ups.status|ups.load|battery.charge|battery.runtime|input.voltage|ups.model):'; done
+        echo '=== PVE TASKS ==='
+        pvenode task list --limit 35 --source all
+      register: audit
+      changed_when: false
+      failed_when: false
+    - ansible.builtin.debug:
+        msg: "{{ audit.stdout_lines }}"
