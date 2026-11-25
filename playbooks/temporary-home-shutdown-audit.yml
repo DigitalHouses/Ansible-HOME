@@ -21,17 +21,17 @@
   gather_facts: false
   tasks:
     - ansible.builtin.shell: |
-        echo '=== FIRST SHUTDOWN: NUT, AGENT, POWER EVENTS ==='
-        journalctl -b -2 --since '2026-11-25 19:20:00' --no-pager -o short-iso | grep -Ei 'upsmon|nut-|FSD|LOWBATT|on battery|on line|battery|power key|power button|shutdown|digitalhouses_pve_agent' | grep -vE 'systemd\[1\]: (Stopped|Stopping|Reached|Removed|Closed|Deactivated|Unmounted)' | tail -100
-        echo '=== SECOND SHUTDOWN: NUT AND AGENT ==='
-        journalctl -b -1 --no-pager -o short-iso | grep -Ei 'upsmon|FSD|LOWBATT|on battery|digitalhouses_pve_agent|upssched' | tail -70
-        echo '=== UPS POLICY ==='
-        grep -hE '^(NOTIFYCMD|NOTIFYFLAG|SHUTDOWNCMD|POWERDOWNFLAG|FINALDELAY|HOSTSYNC|MINSUPPLIES|DEADTIME|AT |CMDSCRIPT|PIPEFN|LOCKFN)' /etc/nut/upsmon.conf /etc/nut/upssched.conf 2>/dev/null || true
-        echo '=== UPS STATUS ==='
-        for ups in $(upsc -l 127.0.0.1 2>/dev/null); do upsc "$ups@127.0.0.1" 2>/dev/null | grep -E '^(ups.status|ups.load|battery.charge|battery.runtime|battery.charge.low|battery.runtime.low|input.voltage):'; done
-        echo '=== HAOS ==='
+        echo '=== FSD SOURCE / POLICY SERVICES ==='
+        systemctl list-units --all --no-pager | grep -Ei 'ups|nut|power' | head -50
+        echo '=== UPS POLICY LOGS ==='
+        for boot in -2 -1; do journalctl -b "$boot" --since '2026-11-25 19:45:00' --no-pager -o short-iso | grep -Ei 'dh-pve-ups|ups-policy|battery.*threshold|upsmon -c|runtime.*threshold|power.fail|low battery' | head -100; done
+        echo '=== POLICY CONFIG PATHS ==='
+        find /etc/digitalhouses /opt/digitalhouses/dh_pve_app -maxdepth 3 -type f \( -iname '*ups*' -o -iname '*policy*' \) 2>/dev/null | head -50
+        echo '=== POLICY CODE ==='
+        grep -RInE --include='*.py' --include='*.sh' --include='dh-pve-ups-policy*' 'upsmon.*fsd|battery_charge_threshold|battery_runtime_threshold|shutdown_threshold|shutdown_on_battery' /opt/digitalhouses/dh_pve_app 2>/dev/null | cut -c1-400 | head -60
+        echo '=== CURRENT HAOS ==='
         qm status 2222
-        qm guest cmd 2222 ping
+        timeout 10 qm guest cmd 2222 network-get-interfaces
         curl -sS -m 5 -o /dev/null -w 'HA HTTP %{http_code}\n' http://192.168.11.222:8123/
       register: audit
       changed_when: false
