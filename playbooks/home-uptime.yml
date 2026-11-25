@@ -177,11 +177,36 @@
       changed_when: true
       when: home36_unit.rc != 0
 
-    - name: Reload systemd only when installing unit
+    - name: Configure ICMP access before every Uptime Kuma start
+      ansible.builtin.command:
+        argv:
+          - pct
+          - exec
+          - "{{ home_lxc_id }}"
+          - --
+          - sh
+          - -ec
+          - |
+            dir=/etc/systemd/system/uptime-kuma.service.d
+            file="$dir/icmp.conf"
+            install -d -m 0755 "$dir"
+            desired=$(cat <<'EOF'
+            [Service]
+            ExecStartPre=+/bin/sh -ec 'echo 0 65535 > /proc/sys/net/ipv4/ping_group_range'
+            EOF
+            )
+            if [ ! -f "$file" ] || [ "$(cat "$file")" != "$desired" ]; then
+              printf '%s\n' "$desired" > "$file"
+              echo CONFIG_CHANGED
+            fi
+      register: home36_icmp_policy
+      changed_when: "'CONFIG_CHANGED' in home36_icmp_policy.stdout"
+
+    - name: Reload systemd when service configuration changes
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, daemon-reload]
       changed_when: true
-      when: home36_unit.rc != 0
+      when: home36_unit.rc != 0 or home36_icmp_policy.changed
 
     - name: Inspect Uptime Kuma service state
       ansible.builtin.command:
@@ -203,6 +228,14 @@
       changed_when: true
       when: home36_active.stdout | trim != 'active' or home36_enabled.stdout | trim != 'enabled'
 
+    - name: Apply changed ICMP policy to running Uptime Kuma
+      ansible.builtin.command:
+        argv: [pct, exec, "{{ home_lxc_id }}", --, systemctl, restart, uptime-kuma]
+      changed_when: true
+      when:
+        - home36_icmp_policy.changed
+        - home36_active.stdout | trim == 'active'
+
     - name: Verify local authenticated-ready Uptime Kuma web server
       ansible.builtin.command:
         argv: [pct, exec, "{{ home_lxc_id }}", --, curl, -s, -o, /dev/null, -w, "%{http_code}", http://127.0.0.1:3001/]
@@ -219,30 +252,6 @@
       register: home36_socket_client
       changed_when: false
       failed_when: home36_socket_client.rc != 0 or 'SOCKET_IO_READY' not in home36_socket_client.stdout
-
-    - name: Enable ICMP ping for all users inside HOME Uptime LXC
-      ansible.builtin.command:
-        argv:
-          - pct
-          - exec
-          - "{{ home_lxc_id }}"
-          - --
-          - sh
-          - -ec
-          - |
-            desired="0 65535"
-            file=/etc/sysctl.d/90-dh-uptime-icmp.conf
-            line="net.ipv4.ping_group_range = $desired"
-            if [ ! -f "$file" ] || [ "$(cat "$file")" != "$line" ]; then
-              printf '%s\n' "$line" > "$file"
-              echo CONFIG_CHANGED
-            fi
-            if [ "$(awk '{print $1 " " $2}' /proc/sys/net/ipv4/ping_group_range)" != "$desired" ]; then
-              printf '%s\n' "$desired" > /proc/sys/net/ipv4/ping_group_range
-              echo RUNTIME_CHANGED
-            fi
-      register: home36_icmp_policy
-      changed_when: "'CHANGED' in home36_icmp_policy.stdout"
 
     - name: Verify PVE ping as Uptime Kuma user
       ansible.builtin.command:
