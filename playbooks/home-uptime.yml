@@ -275,11 +275,11 @@
           - -lc
           - "cd /opt/uptime-kuma && node -"
         stdin: |-
-          const cfg = {{ {'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
+          const cfg = {{ {'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'mqttHost': DH_MQTT_BROKER_HOST | default(home_lxc_ip.rsplit('.', 1)[0] ~ '.222', true), 'mqttUsername': DH_MQTT_USERNAME | default('', true), 'mqttPassword': DH_MQTT_PASSWORD | default('', true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
           {{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/home-uptime-socket-pilot.cjs') }}
       register: home36_socket_pilot
       failed_when: false
-      changed_when: "'MONITOR=CREATED' in home36_socket_pilot.stdout or 'TELEGRAM=TESTED_AND_CREATED' in home36_socket_pilot.stdout"
+      changed_when: "'MONITOR=CREATED' in home36_socket_pilot.stdout or 'MONITOR=UPDATED' in home36_socket_pilot.stdout or 'TELEGRAM=TESTED_AND_CREATED' in home36_socket_pilot.stdout"
       when:
         - DH_UPTIME_ADMIN_USERNAME | default('', true) | length > 0
         - DH_UPTIME_ADMIN_PASSWORD | default('', true) | length > 0

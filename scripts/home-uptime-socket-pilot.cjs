@@ -95,7 +95,9 @@ async function maybeRun() {
         const targets = [
             { name: 'HOME PVE', type: 'ping', hostname: cfg.pveIP },
             { name: 'HOME PBS', type: 'ping', hostname: cfg.pbsIP },
-            { name: 'HOME MQTT broker', type: 'port', hostname: cfg.haosIP, port: 1883 },
+            { name: 'HOME MQTT broker', type: 'mqtt', hostname: cfg.mqttHost, port: 1883,
+                mqttUsername: cfg.mqttUsername, mqttPassword: cfg.mqttPassword,
+                mqttTopic: '$SYS/broker/uptime', mqttCheckType: 'keyword', mqttSuccessMessage: 'seconds' },
             { name: 'HOME Internet', type: 'http', url: 'https://www.cloudflare.com/cdn-cgi/trace', method: 'GET', accepted_statuscodes: ['200'] },
             { name: 'HOME HAOS', type: 'ping', hostname: cfg.haosIP },
             { name: 'HOME gateway', type: 'ping', hostname: cfg.gatewayIP }
@@ -109,9 +111,18 @@ async function maybeRun() {
         }
         let created = 0;
         let existing = 0;
+        let updated = 0;
         for (const target of targets) {
             const current = monitors.find(m => m.name === target.name);
             if (current) {
+                if (target.type === 'mqtt' || target.type === 'postgres') {
+                    const saved = (await call('getMonitor', current.id)).monitor;
+                    if (Object.entries(target).some(([key, value]) => saved[key] !== value)) {
+                        await call('editMonitor', { ...saved, ...target });
+                        updated++;
+                        continue;
+                    }
+                }
                 existing++;
                 continue;
             }
@@ -123,7 +134,7 @@ async function maybeRun() {
             created++;
         }
         const postgres = cfg.postgresPassword ? 'CONFIGURED' : 'WAITING_TASK05';
-        finish(`ACCOUNT=${accountStatus} MONITOR=${created ? 'CREATED' : 'EXISTING'} CREATED=${created} EXISTING=${existing} POSTGRES=${postgres} TELEGRAM=${telegramStatus}`, 0);
+        finish(`ACCOUNT=${accountStatus} MONITOR=${created ? 'CREATED' : updated ? 'UPDATED' : 'EXISTING'} CREATED=${created} UPDATED=${updated} EXISTING=${existing} POSTGRES=${postgres} TELEGRAM=${telegramStatus}`, 0);
     } catch (e) {
         // Never print remote exception messages: some HTTP libraries include tokens in their errors.
         finish(e.message.startsWith('SOCKET_TIMEOUT_') ? 'SOCKET_TIMEOUT' : 'API_OPERATION_FAILED');

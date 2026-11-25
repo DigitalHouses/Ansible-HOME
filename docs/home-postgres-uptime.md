@@ -35,9 +35,9 @@
 - HOME task **05** stores Uptime admin username/password and optional Telegram
   Bot Token/Chat ID in Semaphore secrets. Task 36 initializes an empty SQLite
   database and first admin automatically using upstream Socket.IO `setup`.
-  Existing passwords, monitors and database remain unchanged on reruns.
-- HOME task 36 uses authenticated upstream Socket.IO `add` to create **only
-  missing** monitors with a 60-second interval and attaches `HOME Telegram`
+  Existing admin passwords and database are preserved on reruns; managed protocol monitors are reconciled in place.
+- HOME task 36 uses authenticated upstream Socket.IO `add` to create
+  missing monitors and `editMonitor` to reconcile MQTT/PostgreSQL in place with a 60-second interval and attaches `HOME Telegram`
   notifications (where configured). Telegram is created only once, after
   a successful upstream `testNotification` call. It never duplicates monitors.
 
@@ -46,10 +46,12 @@
 | HOME PVE | Ping | HOME `.220` |
 | HOME PBS | Ping | HOME `.223` |
 | HOME PostgreSQL | PostgreSQL | HOME `.224:5432`, DB `homeassistant`, user `postgres`, query `SELECT 1` |
-| HOME MQTT broker | TCP Port | HOME `.222:1883` |
+| HOME MQTT broker | MQTT | HOME `.222:1883` (or broker from task 05), subscribe to `$SYS/broker/uptime`, keyword `seconds` |
 | HOME Internet | HTTP(s) | `https://www.cloudflare.com/cdn-cgi/trace` (HTTP 200) |
 | HOME HAOS | Ping | HOME `.222` |
 | HOME gateway | Ping | PVE default gateway (not hard-coded) |
+
+MQTT uses existing broker host, username and password from task 05. It checks a native MQTT subscription, not TCP reachability. Existing monitor ID, notification settings and history are retained.
 
 **PostgreSQL monitor requires `DH_POSTGRES_PASSWORD` in task 05.** Without
 this secret, task 36 creates the other six monitors and reports
@@ -58,7 +60,7 @@ the actual `SELECT 1` monitor. Task 35 must create CT1224 and database
 `homeassistant` for this monitor to become green. No dummy SQL credentials,
 false-positive TCP substitution, or unrelated guests.
 
-ICMP is permitted for ordinary LXC users via persistent
+ICMP is enabled before every service start by a systemd drop-in setting
 `net.ipv4.ping_group_range = 0 65535`, without running Uptime as root.
 The task uses Uptime Kuma's application API and never modifies its SQLite
 directly. UI remains accessible only on the HOME LAN.
