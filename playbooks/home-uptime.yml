@@ -4,11 +4,40 @@
   connection: local
   gather_facts: false
   vars_files: [/etc/digitalhouses/pve.yml]
+  vars:
+    site_id: "{{ lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim }}"
+    github_token: "{{ DH_GITHUB_PROVISION_TOKEN | default('', true) }}"
   tasks:
     - name: Require HOME PVE identity
       ansible.builtin.assert:
         that: (pve.ipv4.split('.') | last | int) == 220
         fail_msg: HOME36_PVE_IDENTITY_MISMATCH
+
+    - name: Read canonical site owner for monitoring notifications
+      ansible.builtin.uri:
+        url: "https://api.github.com/repos/DigitalHouses/site-{{ site_id }}/contents/inventories/{{ site_id }}/site.yml?ref=main"
+        headers:
+          Authorization: "Bearer {{ github_token }}"
+          Accept: application/vnd.github+json
+          X-GitHub-Api-Version: '2022-11-28'
+        use_proxy: false
+        timeout: 20
+        status_code: 200
+      register: home36_site_manifest
+      changed_when: false
+      no_log: true
+
+    - name: Resolve canonical site identity
+      ansible.builtin.set_fact:
+        home36_site: "{{ (home36_site_manifest.json.content | b64decode | from_yaml).site }}"
+      no_log: true
+
+    - name: Require the declared owner slug
+      ansible.builtin.assert:
+        that:
+          - home36_site.id == site_id
+          - home36_site.owner_slug is match('^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
+        fail_msg: HOME36_SITE_OWNER_IDENTITY_MISMATCH
 
     - name: Register only existing HOME PVE
       ansible.builtin.add_host:
@@ -22,6 +51,7 @@
         ansible_ssh_common_args: >-
           -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        home36_owner_slug: "{{ home36_site.owner_slug }}"
         home_lxc_id: "1237"
         home_lxc_hostname: "{{ 'uptime-' ~ (lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim) }}"
         home_lxc_ip: "{{ pve.ipv4.rsplit('.', 1)[0] ~ '.237' }}"
@@ -275,7 +305,7 @@
           - -lc
           - "cd /opt/uptime-kuma && node -"
         stdin: |-
-          const cfg = {{ {'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'mqttHost': DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) | default(home_lxc_ip.rsplit('.', 1)[0] ~ '.222', true), 'mqttUsername': DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true), 'mqttPassword': DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
+          const cfg = {{ {'ownerSlug': home36_owner_slug, 'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'mqttHost': DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) | default(home_lxc_ip.rsplit('.', 1)[0] ~ '.222', true), 'mqttUsername': DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true), 'mqttPassword': DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
           {{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/home-uptime-socket-pilot.cjs') }}
       register: home36_socket_pilot
       failed_when: false
