@@ -62,6 +62,26 @@ async function maybeRun() {
     if (!loggedIn || monitors === null || notifications === null || started) return;
     started = true;
     try {
+        if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(cfg.ownerSlug || '')) {
+            return finish('OWNER_SLUG_INVALID');
+        }
+        const names = {
+            'HOME PVE': 'pve',
+            'HOME PBS': 'pbs',
+            'HOME MQTT broker': 'mqtt',
+            'HOME Internet': 'internet',
+            'HOME HAOS': 'haos',
+            'HOME gateway': 'router',
+            'HOME PostgreSQL': 'postgresql'
+        };
+        // Refuse collisions before editing any monitor. Never delete a monitor or
+        // create a duplicate when migrating legacy names.
+        for (const [legacy, object] of Object.entries(names)) {
+            const name = cfg.ownerSlug + '-' + object;
+            if (monitors.filter(m => m.name === legacy || m.name === name).length > 1) {
+                return finish('MONITOR_NAME_CONFLICT_' + object);
+            }
+        }
         let notificationID = null;
         if (cfg.telegramBotToken && cfg.telegramChatID) {
             const name = 'HOME Telegram';
@@ -112,13 +132,22 @@ async function maybeRun() {
         let created = 0;
         let existing = 0;
         let updated = 0;
+        // Rename even an existing PostgreSQL monitor if credentials are not
+        // available on this run; do not replace its connection settings.
+        if (!cfg.postgresPassword && monitors.some(m => m.name === 'HOME PostgreSQL')) {
+            targets.push({ name: 'HOME PostgreSQL' });
+        }
         for (const target of targets) {
-            const current = monitors.find(m => m.name === target.name);
+            const legacy = target.name;
+            target.name = cfg.ownerSlug + '-' + names[legacy];
+            const current = monitors.find(m => m.name === target.name || m.name === legacy);
             if (current) {
-                if (target.type === 'mqtt' || target.type === 'postgres') {
+                const changes = target.type === 'mqtt' || target.type === 'postgres'
+                    ? target : { name: target.name };
+                if (current.name !== target.name || target.type === 'mqtt' || target.type === 'postgres') {
                     const saved = (await call('getMonitor', current.id)).monitor;
-                    if (Object.entries(target).some(([key, value]) => saved[key] !== value)) {
-                        await call('editMonitor', { ...saved, ...target });
+                    if (Object.entries(changes).some(([key, value]) => saved[key] !== value)) {
+                        await call('editMonitor', { ...saved, ...changes });
                         updated++;
                         continue;
                     }

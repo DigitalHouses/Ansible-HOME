@@ -35,21 +35,23 @@
 - HOME task **05** stores Uptime admin username/password and optional Telegram
   Bot Token/Chat ID in Semaphore secrets. Task 36 initializes an empty SQLite
   database and first admin automatically using upstream Socket.IO `setup`.
-  Existing admin passwords and database are preserved on reruns; managed protocol monitors are reconciled in place.
+  Existing admin passwords and database are preserved on reruns; managed monitors are renamed and protocol settings reconciled in place.
 - HOME task 36 uses authenticated upstream Socket.IO `add` to create
-  missing monitors and `editMonitor` to reconcile MQTT/PostgreSQL in place with a 60-second interval and attaches `HOME Telegram`
+  missing monitors and `editMonitor` to rename legacy monitors and reconcile MQTT/PostgreSQL in place with a 60-second interval and attaches `HOME Telegram`
   notifications (where configured). Telegram is created only once, after
   a successful upstream `testNotification` call. It never duplicates monitors.
 
 | Monitor | Upstream type | Target |
 | --- | --- | --- |
-| HOME PVE | Ping | HOME `.220` |
-| HOME PBS | Ping | HOME `.223` |
-| HOME PostgreSQL | PostgreSQL | HOME `.224:5432`, DB `homeassistant`, user `postgres`, query `SELECT 1` |
-| HOME MQTT broker | MQTT | HOME `.222:1883` (or broker from task 05), subscribe to `$SYS/broker/uptime`, keyword `seconds` |
-| HOME Internet | HTTP(s) | `https://www.cloudflare.com/cdn-cgi/trace` (HTTP 200) |
-| HOME HAOS | Ping | HOME `.222` |
-| HOME gateway | Ping | PVE default gateway (not hard-coded) |
+| `<owner_slug>-pve` | Ping | HOME `.220` |
+| `<owner_slug>-pbs` | Ping | HOME `.223` |
+| `<owner_slug>-postgresql` | PostgreSQL | HOME `.224:5432`, DB `homeassistant`, user `postgres`, query `SELECT 1` |
+| `<owner_slug>-mqtt` | MQTT | HOME `.222:1883` (or broker from task 05), subscribe to `$SYS/broker/uptime`, keyword `seconds` |
+| `<owner_slug>-internet` | HTTP(s) | `https://www.cloudflare.com/cdn-cgi/trace` (HTTP 200) |
+| `<owner_slug>-haos` | Ping | HOME `.222` |
+| `<owner_slug>-router` | Ping | PVE default gateway (not hard-coded) |
+
+Monitor names use the canonical `site.owner_slug` from the private site manifest, followed by the object slug (e.g. `serzhan-mqtt`). Telegram alerts therefore identify the owner and object. Legacy HOME names are migrated via the native API, preserving monitor IDs, history and notifications. Duplicate names block migration without deleting monitors.
 
 MQTT uses existing broker host, username and password from task 05. It checks a native MQTT subscription, not TCP reachability. Existing monitor ID, notification settings and history are retained.
 
