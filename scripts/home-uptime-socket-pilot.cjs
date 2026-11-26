@@ -65,6 +65,9 @@ async function maybeRun() {
         if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(cfg.ownerSlug || '')) {
             return finish('OWNER_SLUG_INVALID');
         }
+        if (!/^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$/.test(cfg.siteId || '')) {
+            return finish('SITE_ID_INVALID');
+        }
         const names = {
             'HOME PVE': 'pve',
             'HOME PBS': 'pbs',
@@ -74,11 +77,15 @@ async function maybeRun() {
             'HOME gateway': 'router',
             'HOME PostgreSQL': 'postgresql'
         };
+        const canonicalName = legacy => cfg.siteId + '-' + names[legacy];
+        const matchingMonitors = legacy => {
+            const aliases = new Set([legacy, cfg.ownerSlug + '-' + names[legacy], canonicalName(legacy)]);
+            return monitors.filter(m => aliases.has(m.name));
+        };
         // Refuse collisions before editing any monitor. Never delete a monitor or
         // create a duplicate when migrating legacy names.
         for (const [legacy, object] of Object.entries(names)) {
-            const name = cfg.ownerSlug + '-' + object;
-            if (monitors.filter(m => m.name === legacy || m.name === name).length > 1) {
+            if (matchingMonitors(legacy).length > 1) {
                 return finish('MONITOR_NAME_CONFLICT_' + object);
             }
         }
@@ -134,13 +141,13 @@ async function maybeRun() {
         let updated = 0;
         // Rename even an existing PostgreSQL monitor if credentials are not
         // available on this run; do not replace its connection settings.
-        if (!cfg.postgresPassword && monitors.some(m => m.name === 'HOME PostgreSQL')) {
+        if (!cfg.postgresPassword && matchingMonitors('HOME PostgreSQL').length === 1) {
             targets.push({ name: 'HOME PostgreSQL' });
         }
         for (const target of targets) {
             const legacy = target.name;
-            target.name = cfg.ownerSlug + '-' + names[legacy];
-            const current = monitors.find(m => m.name === target.name || m.name === legacy);
+            target.name = canonicalName(legacy);
+            const current = matchingMonitors(legacy)[0];
             if (current) {
                 const changes = target.type === 'mqtt' || target.type === 'postgres'
                     ? target : { name: target.name };

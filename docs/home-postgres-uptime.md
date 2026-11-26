@@ -43,15 +43,15 @@
 
 | Monitor | Upstream type | Target |
 | --- | --- | --- |
-| `<owner_slug>-pve` | Ping | HOME `.220` |
-| `<owner_slug>-pbs` | Ping | HOME `.223` |
-| `<owner_slug>-postgresql` | PostgreSQL | HOME `.224:5432`, DB `homeassistant`, user `postgres`, query `SELECT 1` |
-| `<owner_slug>-mqtt` | MQTT | HOME `.222:1883` (or broker from task 05), subscribe to `$SYS/broker/uptime`, keyword `seconds` |
-| `<owner_slug>-internet` | HTTP(s) | `https://www.cloudflare.com/cdn-cgi/trace` (HTTP 200) |
-| `<owner_slug>-haos` | Ping | HOME `.222` |
-| `<owner_slug>-router` | Ping | PVE default gateway (not hard-coded) |
+| `<site_id>-pve` | Ping | HOME `.220` |
+| `<site_id>-pbs` | Ping | HOME `.223` |
+| `<site_id>-postgresql` | PostgreSQL | HOME `.224:5432`, DB `homeassistant`, user `postgres`, query `SELECT 1` |
+| `<site_id>-mqtt` | MQTT | HOME `.222:1883` (or broker from task 05), subscribe to `$SYS/broker/uptime`, keyword `seconds` |
+| `<site_id>-internet` | HTTP(s) | `https://www.cloudflare.com/cdn-cgi/trace` (HTTP 200) |
+| `<site_id>-haos` | Ping | HOME `.222` |
+| `<site_id>-router` | Ping | PVE default gateway (not hard-coded) |
 
-Monitor names use the canonical `site.owner_slug` from the private site manifest, followed by the object slug (e.g. `serzhan-mqtt`). Telegram alerts therefore identify the owner and object. Legacy HOME names are migrated via the native API, preserving monitor IDs, history and notifications. Duplicate names block migration without deleting monitors.
+Monitor names use the canonical `site.id` from the private site manifest, followed by the object slug (e.g. `serzhan-home-mqtt`). Telegram alerts therefore identify the site and monitored object. Legacy HOME and owner-only names are migrated via the native API, preserving monitor IDs, history and notifications. Duplicate names block migration without deleting monitors.
 
 MQTT uses existing broker host, username and password from task 05. It checks a native MQTT subscription, not TCP reachability. Existing monitor ID, notification settings and history are retained.
 
