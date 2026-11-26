@@ -36,6 +36,7 @@
       ansible.builtin.assert:
         that:
           - home36_site.id == site_id
+          - site_id is match('^[a-z][a-z0-9]*(?:-[a-z0-9]+)+$')
           - home36_site.owner_slug is match('^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$')
         fail_msg: HOME36_SITE_OWNER_IDENTITY_MISMATCH
 
@@ -51,6 +52,7 @@
         ansible_ssh_common_args: >-
           -o BatchMode=yes -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes
           -o UserKnownHostsFile=/var/lib/semaphore/.ssh/known_hosts
+        home36_site_id: "{{ home36_site.id }}"
         home36_owner_slug: "{{ home36_site.owner_slug }}"
         home_lxc_id: "1237"
         home_lxc_hostname: "{{ 'uptime-' ~ (lookup('ansible.builtin.file', '/etc/digitalhouses/site-id') | trim) }}"
@@ -305,7 +307,7 @@
           - -lc
           - "cd /opt/uptime-kuma && node -"
         stdin: |-
-          const cfg = {{ {'ownerSlug': home36_owner_slug, 'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'mqttHost': DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) | default(home_lxc_ip.rsplit('.', 1)[0] ~ '.222', true), 'mqttUsername': DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true), 'mqttPassword': DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
+          const cfg = {{ {'siteId': home36_site_id, 'ownerSlug': home36_owner_slug, 'username': DH_UPTIME_ADMIN_USERNAME, 'password': DH_UPTIME_ADMIN_PASSWORD, 'telegramBotToken': DH_UPTIME_TELEGRAM_BOT_TOKEN | default('', true), 'telegramChatID': DH_UPTIME_TELEGRAM_CHAT_ID | default('', true), 'pveIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.220', 'pbsIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.223', 'haosIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.222', 'postgresIP': home_lxc_ip.rsplit('.', 1)[0] ~ '.224', 'postgresPassword': DH_POSTGRES_PASSWORD | default('', true), 'mqttHost': DH_MQTT_BROKER_HOST | default(lookup('ansible.builtin.env', 'DH_MQTT_BROKER_HOST'), true) | default(home_lxc_ip.rsplit('.', 1)[0] ~ '.222', true), 'mqttUsername': DH_MQTT_USERNAME | default(lookup('ansible.builtin.env', 'DH_MQTT_USERNAME'), true), 'mqttPassword': DH_MQTT_PASSWORD | default(lookup('ansible.builtin.env', 'DH_MQTT_PASSWORD'), true), 'gatewayIP': home36_gateway.stdout | trim} | to_json }};
           {{ lookup('ansible.builtin.file', playbook_dir ~ '/../scripts/home-uptime-socket-pilot.cjs') }}
       register: home36_socket_pilot
       failed_when: false
