@@ -267,7 +267,6 @@
         requested_ip_action: "{{ ip_action }}"
         requested_new_ipv4: "{{ new_ipv4 }}"
         requested_quantum_action: "{{ quantum_action }}"
-        requested_cf_update: "{{ cf_update }}"
         requested_quantum_update: "{{ quantum_update }}"
         original_pve_ipv4: "{{ pve.ipv4 }}"
         recorded_pve: "{{ pve }}"

@@ -36,7 +36,7 @@
           - actions | to_json is search('ansible.builtin.get_url')
           - actions | to_json is search('accept-dns=false')
           - actions | to_json is search('accept-routes=false')
-          - actions | to_json is search('auto-update=false')
+          - actions | to_json is search('auto-update=true')
           - actions | to_json is search('file:/run/dh-home71-tailscale-auth-key')
           - actions | to_json is search('Remove temporary auth-key')
           - actions | to_json is search('HOME71_LOCAL_NETWORK_CHANGED')

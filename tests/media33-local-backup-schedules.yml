@@ -60,7 +60,7 @@
           - pve_update['ansible.builtin.command'].argv[:2] == ['pvesh','set']
           - "'--exclude' in pve_update['ansible.builtin.command'].argv"
           - "'--remove' in pve_create['ansible.builtin.command'].argv"
-          - pve_create.when == 'media33_pve_backup_own | length == 0'
+          - pve_create.when == ['media33_pve_backup_own | length == 0', 'media33_pve_backup_competing | length == 0']
           - client_package['ansible.builtin.apt'].name == 'proxmox-backup-client'
           - client_package['ansible.builtin.apt'].state == 'present'
           - client_generate.no_log is sameas true
